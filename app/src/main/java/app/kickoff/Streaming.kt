@@ -8,20 +8,27 @@ import java.net.URLEncoder
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.util.Locale
 
-/** A place to watch. [launch] is set only when the matching app is installed on this phone. */
+/** A channel to show. [launch] is set only when the matching app is installed on this phone. */
 data class WatchOption(
     val name: String,
-    val kind: String,
+    val country: String,
     val launch: Intent?,
 )
 
 object Streaming {
     /**
-     * [keys] match the broadcaster name from ESPN; [packages] are the known Android apps;
-     * [labels] find the app by its home-screen name if the package differs (e.g. a regional build).
+     * [keys] match the channel name; [packages] are the known Android apps; [labels] find the app by
+     * its home-screen name if the package differs. [anyCountry] apps get a button even when the
+     * listing is for another country (e.g. Entel Gol is Bolivian but its app is the same everywhere).
      */
-    private class Provider(val keys: List<String>, val packages: List<String>, val labels: List<String>)
+    private class Provider(
+        val keys: List<String>,
+        val packages: List<String>,
+        val labels: List<String>,
+        val anyCountry: Boolean = false,
+    )
 
     private val providers = listOf(
         Provider(listOf("peacock", "telemundo", "universo"), listOf("com.peacocktv.peacockandroid"), listOf("peacock")),
@@ -33,31 +40,45 @@ object Streaming {
         Provider(listOf("dazn"), listOf("com.dazn"), listOf("dazn")),
         Provider(listOf("fubo"), listOf("com.fubo.mobile"), listOf("fubo")),
         Provider(listOf("bein"), emptyList(), listOf("bein")),
-        Provider(listOf("tigo"), emptyList(), listOf("tigo sports")),
-        Provider(listOf("fanatiz"), emptyList(), listOf("fanatiz")),
+        Provider(listOf("entel"), emptyList(), listOf("entel tv", "entel gol"), anyCountry = true),
+        Provider(listOf("tigo"), emptyList(), listOf("tigo sports"), anyCountry = true),
+        Provider(listOf("fanatiz"), emptyList(), listOf("fanatiz"), anyCountry = true),
     )
 
-    /** Broadcaster names for a game, e.g. "Apple TV". Bolivian games fall back to the usual rights holder. */
-    fun names(match: Match): List<Pair<String, String>> {
-        val listed = match.broadcasts.map { b ->
-            b.name to when {
-                b.kind.equals("STREAMING", true) -> "Streaming"
-                b.kind.isBlank() -> ""
-                else -> "TV"
-            }
-        }
-        if (listed.isNotEmpty()) return listed
-        // ESPN lists US broadcasters only and has none for the Bolivian league.
-        if (match.leagueSlug.startsWith("bol.")) return listOf("Tigo Sports" to "Usual Bolivian league broadcaster")
-        return emptyList()
+    /** This phone's country as Live Soccer TV names it ("USA", "Bolivia", ...). */
+    val myCountry: String = when (val c = Locale.getDefault().country) {
+        "US", "" -> "USA"
+        "GB" -> "UK"
+        else -> Locale("", c).getDisplayCountry(Locale.ENGLISH)
     }
 
-    fun optionsFor(context: Context, match: Match): List<WatchOption> = names(match).map { (name, kind) ->
-        val provider = providers.firstOrNull { p -> p.keys.any { name.lowercase().contains(it) } }
-        WatchOption(name, kind, provider?.let { installedApp(context, it) })
+    /**
+     * Every known channel for a game. ESPN only lists US channels.
+     * Bolivian league games fall back to Entel Gol, which holds the exclusive rights.
+     */
+    fun channels(match: Match): List<Channel> {
+        val all = match.broadcasts.map { Channel(it.name, "USA") }
+        if (all.isEmpty() && match.leagueSlug.startsWith("bol.")) return listOf(Channel("Entel Gol", "Bolivia"))
+        return all.distinctBy { it.country.lowercase() to it.name.lowercase() }
     }
 
-    fun summary(match: Match): String = names(match).joinToString(", ") { it.first }
+    /** Channels grouped by country, this phone's country first. */
+    fun byCountry(match: Match): List<Pair<String, List<Channel>>> =
+        channels(match).groupBy { it.country }.toList()
+            .sortedBy { (country, _) -> if (country == myCountry) 0 else 1 }
+
+    /** Short text for notifications and the game list, e.g. "Apple TV" or "Entel Gol (Bolivia)". */
+    fun summary(match: Match): String {
+        val (country, list) = byCountry(match).firstOrNull() ?: return ""
+        val names = list.joinToString(", ") { it.name }
+        return if (country == myCountry) names else "$names ($country)"
+    }
+
+    fun options(context: Context, channels: List<Channel>): List<WatchOption> = channels.map { ch ->
+        val provider = providers.firstOrNull { p -> p.keys.any { ch.name.lowercase().contains(it) } }
+        val usable = provider != null && (ch.country == myCountry || provider.anyCountry)
+        WatchOption(ch.name, ch.country, if (usable) installedApp(context, provider!!) else null)
+    }
 
     private fun installedApp(context: Context, p: Provider): Intent? {
         val pm = context.packageManager
@@ -77,6 +98,21 @@ object Streaming {
         val spanish = match.leagueSlug.startsWith("bol.") || match.leagueSlug.startsWith("conmebol")
         val q = if (spanish) "${match.home} vs ${match.away} dónde ver en vivo $date"
         else "${match.home} vs ${match.away} where to watch $date"
+        return "https://www.google.com/search?q=" + URLEncoder.encode(q, "UTF-8")
+    }
+
+    // Live Soccer TV team pages (ESPN team id -> page). Each lists the team's games with their channels.
+    private val liveSoccerTvTeams = mapOf(
+        "86" to "spain/real-madrid",
+        "6077" to "united-states/houston-dynamo",
+        "2681" to "bolivia/bolivar-la-paz",
+    )
+
+    /** A followed team's Live Soccer TV page, or a web search that finds this game's page there. */
+    fun liveSoccerTvUrl(match: Match, teams: List<Team>): String {
+        val path = teams.firstNotNullOfOrNull { t -> liveSoccerTvTeams[t.id]?.takeIf { t.id in match.teamIds } }
+        if (path != null) return "https://www.livesoccertv.com/teams/$path/"
+        val q = "livesoccertv ${match.home} vs ${match.away}"
         return "https://www.google.com/search?q=" + URLEncoder.encode(q, "UTF-8")
     }
 

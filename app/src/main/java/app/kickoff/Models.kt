@@ -63,6 +63,9 @@ data class AlertState(
     val read: Boolean = false,     // the user opened one of this game's notifications
 )
 
+/** A TV channel or streaming service and the country it's shown in (e.g. "Entel Gol", "Bolivia"). */
+data class Channel(val name: String, val country: String)
+
 @Serializable
 data class AppState(
     val teams: List<Team> = DEFAULT_TEAMS,

@@ -4,7 +4,8 @@ Android app that alerts you when your soccer teams kick off, start the second ha
 (second-half and full-time alerts stop once you've opened one of that game's alerts). Tapping an
 alert shows where the game is on; streaming apps installed on your phone get an "Open" button.
 
-Match data and US broadcasters come from ESPN's public site API.
+Match data and US broadcasters come from ESPN's public site API. Bolivian league games show Entel Gol
+(the exclusive rights holder), and each game links to Live Soccer TV for channels in every country.
 
 ## Get the app on your phone
 

@@ -32,6 +32,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
@@ -187,7 +189,7 @@ private fun Root(openMatch: String?, onOpenMatch: (String?) -> Unit, needsSetup:
     val match = openMatch?.let { state.matches[it] }
     if (match != null) {
         BackHandler { onOpenMatch(null) }
-        MatchScreen(match, onBack = { onOpenMatch(null) })
+        MatchScreen(match, state.teams, state.showScores, onBack = { onOpenMatch(null) })
     } else {
         HomeScreen(state, refreshing, ::refresh, onOpenMatch, needsSetup, onFixSetup)
     }
@@ -283,7 +285,7 @@ private fun HomeScreen(
                 }) { Text("Send a test notification") }
                 Text(
                     "Alerts: kickoff always; 2nd half and full time only until you open one of that game's alerts. " +
-                        "Broadcaster data is for the US.",
+                        "Channels come from ESPN (US listings). Other countries: Live Soccer TV link on each game.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 8.dp),
@@ -323,9 +325,13 @@ private fun scoreLine(m: Match, showScores: Boolean) =
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun MatchScreen(m: Match, onBack: () -> Unit) {
+private fun MatchScreen(m: Match, teams: List<Team>, showScores: Boolean, onBack: () -> Unit) {
     val context = LocalContext.current
-    val showScores = Store.state.value.showScores
+    val groups = Streaming.byCountry(m)
+    val mine = groups.firstOrNull { it.first == Streaming.myCountry }?.second.orEmpty()
+    val others = groups.filter { it.first != Streaming.myCountry }
+    // Big games list dozens of countries; only open that list by default when it's short.
+    var showOthers by remember(m.id) { mutableStateOf(mine.isEmpty() || others.sumOf { it.second.size } <= 8) }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -334,35 +340,56 @@ private fun MatchScreen(m: Match, onBack: () -> Unit) {
             )
         },
     ) { pad ->
-        Column(Modifier.fillMaxSize().padding(pad).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(
+            Modifier.fillMaxSize().padding(pad).verticalScroll(rememberScrollState()).padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
             Text(m.league, style = MaterialTheme.typography.labelLarge)
             Text(scoreLine(m, showScores), style = MaterialTheme.typography.headlineSmall)
             Text(listOf(m.statusLabel, m.localTime()).filter { it.isNotBlank() }.joinToString(" · "),
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
             HorizontalDivider()
-            // Re-checked every time the screen opens, so a newly installed app gets its button.
-            val options = remember(m.id, m.broadcasts) { Streaming.optionsFor(context, m) }
-            if (options.isEmpty()) Text("No broadcaster listed for this game yet.")
-            else Text("Being shown on", style = MaterialTheme.typography.titleSmall)
-            options.forEach { o ->
-                Card(Modifier.fillMaxWidth()) {
-                    Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(o.name, style = MaterialTheme.typography.titleMedium)
-                            if (o.kind.isNotBlank()) Text(o.kind, style = MaterialTheme.typography.bodySmall)
-                        }
-                        // Only apps installed on this phone get a button; the rest are listed for info.
-                        o.launch?.let { launch ->
-                            Spacer(Modifier.width(8.dp))
-                            Button(onClick = { Streaming.open(context, launch) }) { Text("Open ${o.name}") }
-                        }
-                    }
+            if (groups.isEmpty()) Text("No channel listed for this game yet.")
+            if (mine.isNotEmpty()) {
+                Text("In ${Streaming.myCountry}", style = MaterialTheme.typography.titleSmall)
+                ChannelCards(mine)
+            }
+            if (others.isNotEmpty()) {
+                if (mine.isNotEmpty()) TextButton(onClick = { showOthers = !showOthers }) {
+                    Text(if (showOthers) "Hide other countries" else "Show other countries (${others.size})")
                 }
+                if (showOthers) others.forEach { (country, list) ->
+                    Text(country.ifBlank { "Other" }, style = MaterialTheme.typography.titleSmall)
+                    ChannelCards(list)
+                }
+            }
+            // Opens in the browser; Live Soccer TV lists channels in every country, which ESPN doesn't.
+            TextButton(onClick = { Streaming.openUrl(context, Streaming.liveSoccerTvUrl(m, teams)) }) {
+                Text("See channels in every country on Live Soccer TV")
             }
             TextButton(onClick = { Streaming.openUrl(context, Streaming.findMoreUrl(m)) }) {
                 Icon(Icons.Default.Search, null, Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))
                 Text("Search for other ways to watch")
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChannelCards(channels: List<Channel>) {
+    val context = LocalContext.current
+    // Re-checked each time the screen opens, so a newly installed app gets its button.
+    val options = remember(channels) { Streaming.options(context, channels) }
+    options.forEach { o ->
+        Card(Modifier.fillMaxWidth()) {
+            Row(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(o.name, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                // Only apps installed on this phone get a button; the rest are listed for info.
+                o.launch?.let { launch ->
+                    Spacer(Modifier.width(8.dp))
+                    Button(onClick = { Streaming.open(context, launch) }) { Text("Open ${o.name}") }
+                }
             }
         }
     }
