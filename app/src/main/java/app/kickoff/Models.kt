@@ -1,0 +1,79 @@
+package app.kickoff
+
+import kotlinx.serialization.Serializable
+
+@Serializable
+data class Team(val id: String, val name: String)
+
+@Serializable
+data class Broadcast(val name: String, val kind: String = "")
+
+@Serializable
+data class Match(
+    val id: String,
+    val dateMillis: Long,
+    val home: String,
+    val away: String,
+    val homeScore: String? = null,
+    val awayScore: String? = null,
+    val league: String = "",
+    val leagueSlug: String = "",
+    val state: String = "pre",          // ESPN: pre | in | post
+    val statusName: String = "",        // ESPN: STATUS_FIRST_HALF, STATUS_HALFTIME, ...
+    val period: Int = 0,
+    val completed: Boolean = false,
+    val clock: String = "",
+    val broadcasts: List<Broadcast> = emptyList(),
+    val teamIds: List<String> = emptyList(),
+) {
+    val title get() = "$home vs $away"
+
+    /** Which alert-worthy point of the game we are at. */
+    val phase: Int
+        get() = when {
+            state == "post" -> Phase.ENDED
+            state == "in" && period >= 2 && statusName != "STATUS_HALFTIME" -> Phase.SECOND_HALF
+            state == "in" -> Phase.FIRST_HALF
+            else -> Phase.NONE
+        }
+
+    val statusLabel: String
+        get() = when {
+            statusName == "STATUS_HALFTIME" -> "HT"
+            state == "in" -> "LIVE ${clock.ifBlank { if (period >= 2) "2H" else "1H" }}"
+            state == "post" && completed -> "FT"
+            state == "post" -> statusName.removePrefix("STATUS_").replace('_', ' ').lowercase()
+                .replaceFirstChar { it.uppercase() }
+            else -> ""
+        }
+}
+
+object Phase {
+    const val NONE = 0
+    const val FIRST_HALF = 1
+    const val SECOND_HALF = 2
+    const val ENDED = 3
+}
+
+/** Per-game notification bookkeeping. */
+@Serializable
+data class AlertState(
+    val phase: Int = Phase.NONE,   // highest phase already handled
+    val notified: Boolean = false, // at least one notification was posted
+    val read: Boolean = false,     // the user opened one of this game's notifications
+)
+
+@Serializable
+data class AppState(
+    val teams: List<Team> = DEFAULT_TEAMS,
+    val matches: Map<String, Match> = emptyMap(),
+    val alerts: Map<String, AlertState> = emptyMap(),
+    val showScores: Boolean = false,
+    val lastRefresh: Long = 0,
+)
+
+val DEFAULT_TEAMS = listOf(
+    Team("86", "Real Madrid"),
+    Team("6077", "Houston Dynamo FC"),
+    Team("2681", "Bolívar"),
+)
