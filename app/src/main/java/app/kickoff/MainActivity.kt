@@ -262,7 +262,9 @@ private fun HomeScreen(
     val today = LocalDate.now()
     val sorted = state.matches.values.sortedBy { it.dateMillis }
     val live = sorted.filter { it.state == "in" }
-    // Not started yet, today or later. Finished games and earlier days drop off the list.
+    // Played to the end today (postponed/canceled games aren't "ended"); earlier days drop off.
+    val ended = sorted.filter { it.state == "post" && it.completed && it.zoned().toLocalDate() == today }
+    // Not started yet, today or later.
     val upcoming = sorted.filter { it.state == "pre" && !it.zoned().toLocalDate().isBefore(today) }
 
     Scaffold(
@@ -311,6 +313,10 @@ private fun HomeScreen(
             item(key = "live-header") { SectionHeader("Live") }
             if (live.isEmpty()) item { Hint("No games on right now.") }
             items(live, key = { it.id }) { m -> GameCard(m, state.teams) { onOpenMatch(m.id) } }
+            if (ended.isNotEmpty()) {
+                item(key = "ended-header") { SectionHeader("Ended") }
+                items(ended, key = { it.id }) { m -> GameCard(m, state.teams) { onOpenMatch(m.id) } }
+            }
             item(key = "upcoming-header") { SectionHeader("Upcoming") }
             if (upcoming.isEmpty()) item { Hint(if (refreshing) "Loading…" else "No upcoming games found.") }
             upcoming.groupBy { it.zoned().toLocalDate() }.forEach { (day, dayGames) ->
