@@ -81,9 +81,7 @@ data class AppState(
     val matches: Map<String, Match> = emptyMap(),
     val alerts: Map<String, AlertState> = emptyMap(),
     val scoreboardChecked: Set<String> = emptySet(),   // team ids already checked for a game in progress
-    val showScores: Boolean = false,
     val lastRefresh: Long = 0,
-    val tvStatus: String = "",                         // how the last FotMob channel lookup went
 )
 
 // ESPN's Bolívar color (3c96c4) is darker than the club's light blue.

@@ -61,7 +61,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -91,6 +90,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
@@ -231,7 +231,7 @@ private fun Root(openMatch: String?, onOpenMatch: (String?) -> Unit, needsSetup:
     val match = openMatch?.let { state.matches[it] }
     if (match != null) {
         BackHandler { onOpenMatch(null) }
-        MatchScreen(match, state.showScores, onBack = { onOpenMatch(null) })
+        MatchScreen(match, onBack = { onOpenMatch(null) })
     } else {
         HomeScreen(state, refreshing, ::refresh, onOpenMatch, needsSetup, onFixSetup)
     }
@@ -259,9 +259,11 @@ private fun HomeScreen(
     var showSearch by remember { mutableStateOf(false) }
     var removing by remember { mutableStateOf<Team?>(null) }
     val now = System.currentTimeMillis()
-    val games = state.matches.values
-        .filter { it.dateMillis + WATCH_MAX_MS > now || it.state == "in" }
-        .sortedBy { it.dateMillis }
+    val today = LocalDate.now()
+    val sorted = state.matches.values.sortedBy { it.dateMillis }
+    val live = sorted.filter { it.state == "in" }
+    // Not started yet, today or later. Finished games and earlier days drop off the list.
+    val upcoming = sorted.filter { it.state == "pre" && !it.zoned().toLocalDate().isBefore(today) }
 
     Scaffold(
         topBar = {
@@ -306,45 +308,26 @@ private fun HomeScreen(
                         leadingIcon = { Icon(Icons.Default.Add, null, Modifier.size(18.dp)) })
                 }
             }
-            item {
-                Text("Upcoming & live", style = MaterialTheme.typography.titleMedium)
-                if (games.isEmpty()) Text(
-                    if (refreshing) "Loading…" else "No upcoming games found.",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            games.groupBy { it.zoned().toLocalDate() }.forEach { (day, dayGames) ->
+            item(key = "live-header") { SectionHeader("Live") }
+            if (live.isEmpty()) item { Hint("No games on right now.") }
+            items(live, key = { it.id }) { m -> GameCard(m, state.teams) { onOpenMatch(m.id) } }
+            item(key = "upcoming-header") { SectionHeader("Upcoming") }
+            if (upcoming.isEmpty()) item { Hint(if (refreshing) "Loading…" else "No upcoming games found.") }
+            upcoming.groupBy { it.zoned().toLocalDate() }.forEach { (day, dayGames) ->
                 item(key = "day-$day") { DayDivider(dividerFmt.format(day)) }
-                items(dayGames, key = { it.id }) { m -> GameCard(m, state.teams, state.showScores) { onOpenMatch(m.id) } }
+                items(dayGames, key = { it.id }) { m -> GameCard(m, state.teams) { onOpenMatch(m.id) } }
             }
             item {
-                HorizontalDivider()
-                Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("Show scores")
-                        Text("Final scores and scores in alerts. Off avoids spoilers. Live games always show the score.",
-                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    Switch(state.showScores, onCheckedChange = { v -> Store.update { it.copy(showScores = v) } })
-                }
                 OutlinedButton(onClick = {
                     // Separate id, so it never replaces a real game's alert or marks that game read.
-                    val sample = (games.firstOrNull() ?: Match("", now, "Real Madrid", "Valencia", league = "LALIGA",
-                        broadcasts = listOf(Broadcast("ESPN+", "STREAMING")))).copy(id = "test")
+                    val sample = ((live + upcoming).firstOrNull() ?: Match("", now, "Real Madrid", "Valencia", league = "LALIGA",
+                        tv = mapOf(Streaming.COUNTRY to listOf("ESPN+")))).copy(id = "test")
                     if (notificationsOn(context)) {
-                        Notifier.gameAlert(context, sample, Phase.FIRST_HALF, false)
+                        Notifier.gameAlert(context, sample, Phase.FIRST_HALF)
                     } else {
                         Toast.makeText(context, "Notifications are off for Kickoff. Tap Fix above.", Toast.LENGTH_LONG).show()
                     }
-                }) { Text("Send a test notification") }
-                Text(
-                    "Alerts: kickoff always; 2nd half and full time only until you open one of that game's alerts. " +
-                        "Channels: FotMob's listings for the USA." +
-                        state.tvStatus.ifBlank { null }?.let { "\nFotMob check: $it" }.orEmpty(),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 8.dp),
-                )
+                }, Modifier.padding(top = 8.dp)) { Text("Send a test notification") }
             }
         }
     }
@@ -372,7 +355,7 @@ private fun HomeScreen(
 }
 
 @Composable
-private fun GameCard(m: Match, teams: List<Team>, showScores: Boolean, onClick: () -> Unit) {
+private fun GameCard(m: Match, teams: List<Team>, onClick: () -> Unit) {
     val live = m.state == "in"
     val background = teamColor(m, teams)
     // Dark text on light team colors, white on dark ones (0.18 is where the two contrast equally).
@@ -397,7 +380,7 @@ private fun GameCard(m: Match, teams: List<Team>, showScores: Boolean, onClick: 
                 else Text(m.statusLabel.ifEmpty { m.kickoffTime() }, style = MaterialTheme.typography.labelLarge)
             }
             Spacer(Modifier.height(8.dp))
-            Text(scoreLine(m, showScores), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Text(scoreLine(m), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(8.dp))
             Text("📺 " + Streaming.summary(m).ifEmpty { "Broadcaster not listed yet" }, style = MaterialTheme.typography.bodyLarge,
                 color = content.copy(alpha = 0.8f))
@@ -421,6 +404,16 @@ private fun LiveBadge(label: String) {
     )
 }
 
+@Composable
+private fun SectionHeader(title: String) {
+    Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp))
+}
+
+@Composable
+private fun Hint(text: String) {
+    Text(text, color = MaterialTheme.colorScheme.onSurfaceVariant)
+}
+
 /** A line across the list with the day of the games below it, e.g. "Thu, Nov 5". */
 @Composable
 private fun DayDivider(label: String) {
@@ -437,14 +430,14 @@ private fun teamColor(m: Match, teams: List<Team>): Color? {
     return runCatching { Color(android.graphics.Color.parseColor("#$hex")) }.getOrNull()
 }
 
-/** Live games always show the score; finished ones only with "Show scores" on. */
-private fun scoreLine(m: Match, showScores: Boolean) =
-    if ((m.state == "in" || (showScores && m.state == "post")) && m.homeScore != null) "${m.home} ${m.homeScore} – ${m.awayScore} ${m.away}"
+/** Live and finished games show the score. */
+private fun scoreLine(m: Match) =
+    if (m.state != "pre" && m.homeScore != null) "${m.home} ${m.homeScore} – ${m.awayScore} ${m.away}"
     else m.title
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun MatchScreen(m: Match, showScores: Boolean, onBack: () -> Unit) {
+private fun MatchScreen(m: Match, onBack: () -> Unit) {
     val context = LocalContext.current
     val channels = Streaming.channels(m)
     Scaffold(
@@ -460,7 +453,7 @@ private fun MatchScreen(m: Match, showScores: Boolean, onBack: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text(m.league, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
-            Text(scoreLine(m, showScores), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            Text(scoreLine(m), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
             Text(listOf(m.statusLabel, m.localTime()).filter { it.isNotBlank() }.joinToString(" · "),
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
             HorizontalDivider()

@@ -25,8 +25,8 @@ object Notifier {
         nm.deleteNotificationChannel("watching")
     }
 
-    fun gameAlert(context: Context, match: Match, phase: Int, showScores: Boolean) {
-        val score = if (showScores && match.homeScore != null) " (${match.homeScore}–${match.awayScore})" else ""
+    fun gameAlert(context: Context, match: Match, phase: Int) {
+        val score = if (match.homeScore != null) " (${match.homeScore}–${match.awayScore})" else ""
         val title = when (phase) {
             Phase.FIRST_HALF -> "${match.title} has started!"
             Phase.SECOND_HALF -> "${match.title}$score: 2nd half has started!"

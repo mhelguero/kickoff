@@ -114,7 +114,7 @@ object Tracker {
         val teamsFound = "${s0.teams.count { it.fotmobId.isNotBlank() }}/${s0.teams.size} teams"
         // Refused outright (e.g. HTTP 403): don't send a request per game that will be refused too.
         if (fixtures.isEmpty() && problem.isNotEmpty()) {
-            Store.update { it.copy(tvStatus = "$teamsFound. Error: $problem") }
+            Log.w(TAG, "FotMob: $teamsFound. Error: $problem")
             return
         }
         val my = Streaming.COUNTRY
@@ -128,14 +128,15 @@ object Tracker {
                 .firstOrNull { abs(it.startMillis - m.dateMillis) <= 3 * HOUR }?.id ?: continue
             runCatching { FotMob.channels(fid, my) }.onSuccess { found[m.id] = fid to it }.onFailure(failed("channels"))
         }
-        val status = "$teamsFound, ${found.size} games checked, ${found.values.count { it.second.isNotEmpty() }} " +
-            "with US channels" + problem.ifBlank { null }?.let { ". Error: $it" }.orEmpty()
+        Log.i(TAG, "FotMob: $teamsFound, ${found.size} games checked, " +
+            "${found.values.count { it.second.isNotEmpty() }} with US channels" +
+            problem.ifBlank { null }?.let { ". Error: $it" }.orEmpty())
         Store.update { s ->
             val matches = s.matches.mapValues { (id, m) ->
                 // An empty list is kept too: it records that this country was checked.
                 found[id]?.let { (fid, list) -> m.copy(fotmobId = fid, tv = m.tv + (my to list)) } ?: m
             }
-            s.copy(matches = matches, tvStatus = status)
+            s.copy(matches = matches)
         }
     }
 
@@ -216,13 +217,13 @@ object Tracker {
         // Decide inside the store lock, so a notification tap (markRead) or a second poller running
         // at the same time can't be overwritten or cause a duplicate alert.
         var shouldNotify = false
-        val updated = Store.update { st ->
+        Store.update { st ->
             val alert = st.alerts[match.id] ?: AlertState()
             if (phase <= alert.phase) return@update st
             shouldNotify = !stale && !alert.read
             st.copy(alerts = st.alerts + (match.id to alert.copy(phase = phase, notified = alert.notified || shouldNotify)))
         }
-        if (shouldNotify) Notifier.gameAlert(context, match, phase, updated.showScores)
+        if (shouldNotify) Notifier.gameAlert(context, match, phase)
     }
 
     // ---- scheduling ----

@@ -59,7 +59,21 @@ object Streaming {
     const val COUNTRY = "US"
 
     /** FotMob's US channels and streaming services for a game, e.g. TUDN, ViX, Paramount+. */
-    fun channels(match: Match): List<Channel> = match.tv[COUNTRY].orEmpty().map { Channel(it, COUNTRY) }
+    fun channels(match: Match): List<Channel> =
+        match.tv[COUNTRY].orEmpty().map { espnGroup(it) }.distinct().map { Channel(it, COUNTRY) }
+
+    /**
+     * ESPN's many names, combined: ESPN Select (formerly ESPN+) shows as "ESPN+"; ESPN Deportes,
+     * ESPN Unlimited, ESPN2 and the rest as "ESPN". Other names are unchanged.
+     */
+    private fun espnGroup(name: String): String {
+        val n = name.lowercase()
+        return when {
+            "espn" !in n -> name
+            "select" in n || "+" in n || "plus" in n -> "ESPN+"
+            else -> "ESPN"
+        }
+    }
 
     /** Short text for notifications and the game list, e.g. "TUDN, ViX, Paramount+". */
     fun summary(match: Match): String = channels(match).joinToString(", ") { it.name }
