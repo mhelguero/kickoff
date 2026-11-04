@@ -18,6 +18,8 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.app.NotificationManagerCompat
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
@@ -36,6 +38,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -79,7 +82,10 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -204,13 +210,23 @@ private fun Root(openMatch: String?, onOpenMatch: (String?) -> Unit, needsSetup:
                 val teams = Store.state.value.teams.map { it.id }
                 withContext(Dispatchers.IO) { Tracker.refresh(context) }
             } while (Store.state.value.teams.map { it.id } != teams)
-            if (Tracker.gamesToWatch().isNotEmpty()) Tracker.startWatching(context)
             refreshing = false
         }
     }
 
-    // Live scores reach the list through Store; WatchService does the polling while a game is on.
     LaunchedEffect(state.teams.map { it.id }) { refresh() }
+
+    // While the app is on screen, keep live scores fresh. In the background, Tracker's per-minute
+    // alarm does the polling (for alerts), so no service or permanent notification is needed.
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(Unit) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                if (Tracker.gamesToWatch().isNotEmpty()) withContext(Dispatchers.IO) { runCatching { Tracker.pollOnce(context) } }
+                delay(30_000)
+            }
+        }
+    }
 
     val match = openMatch?.let { state.matches[it] }
     if (match != null) {
@@ -222,7 +238,12 @@ private fun Root(openMatch: String?, onOpenMatch: (String?) -> Unit, needsSetup:
 }
 
 private val dayFmt = DateTimeFormatter.ofPattern("EEE, MMM d · h:mm a")
-private fun Match.localTime() = dayFmt.format(Instant.ofEpochMilli(dateMillis).atZone(ZoneId.systemDefault()))
+private val timeFmt = DateTimeFormatter.ofPattern("h:mm a")
+private val dividerFmt = DateTimeFormatter.ofPattern("EEE, MMM d")
+private fun Match.zoned() = Instant.ofEpochMilli(dateMillis).atZone(ZoneId.systemDefault())
+private fun Match.localTime() = dayFmt.format(zoned())
+/** Kickoff time only: cards sit under a divider that already names the day. */
+private fun Match.kickoffTime() = if (timeValid) timeFmt.format(zoned()) else "Time TBD"
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -292,13 +313,16 @@ private fun HomeScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            items(games, key = { it.id }) { m -> GameCard(m, state.teams, state.showScores) { onOpenMatch(m.id) } }
+            games.groupBy { it.zoned().toLocalDate() }.forEach { (day, dayGames) ->
+                item(key = "day-$day") { DayDivider(dividerFmt.format(day)) }
+                items(dayGames, key = { it.id }) { m -> GameCard(m, state.teams, state.showScores) { onOpenMatch(m.id) } }
+            }
             item {
                 HorizontalDivider()
                 Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text("Show scores")
-                        Text("In the app and in alerts. Off avoids spoilers.",
+                        Text("Final scores and scores in alerts. Off avoids spoilers. Live games always show the score.",
                             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     Switch(state.showScores, onCheckedChange = { v -> Store.update { it.copy(showScores = v) } })
@@ -365,17 +389,44 @@ private fun GameCard(m: Match, teams: List<Team>, showScores: Boolean, onClick: 
         else BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
         Column(Modifier.padding(20.dp)) {
-            Row {
-                Text(m.league, style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
-                Text(m.statusLabel.ifEmpty { m.localTime() }, style = MaterialTheme.typography.labelLarge,
-                    fontWeight = if (live) FontWeight.Bold else null)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(m.league, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f))
+                if (live) LiveBadge(m.statusLabel)
+                else Text(m.statusLabel.ifEmpty { m.kickoffTime() }, style = MaterialTheme.typography.labelLarge)
             }
             Spacer(Modifier.height(8.dp))
-            Text(scoreLine(m, showScores), style = MaterialTheme.typography.titleLarge)
+            Text(scoreLine(m, showScores), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(8.dp))
             Text("📺 " + Streaming.summary(m).ifEmpty { "Broadcaster not listed yet" }, style = MaterialTheme.typography.bodyLarge,
                 color = content.copy(alpha = 0.8f))
         }
+    }
+}
+
+/** White text on a red rounded rectangle, e.g. "LIVE 63'" or "HT". */
+@Composable
+private fun LiveBadge(label: String) {
+    Text(
+        label,
+        color = Color.White,
+        fontWeight = FontWeight.Bold,
+        style = MaterialTheme.typography.labelLarge,
+        modifier = Modifier
+            // The white edge keeps the badge visible on red team colors.
+            .border(1.dp, Color.White, RoundedCornerShape(6.dp))
+            .background(Color(0xFFD32F2F), RoundedCornerShape(6.dp))
+            .padding(horizontal = 8.dp, vertical = 2.dp),
+    )
+}
+
+/** A line across the list with the day of the games below it, e.g. "Thu, Nov 5". */
+@Composable
+private fun DayDivider(label: String) {
+    Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        HorizontalDivider(Modifier.weight(1f).padding(start = 12.dp))
     }
 }
 
@@ -385,8 +436,9 @@ private fun teamColor(m: Match, teams: List<Team>): Color? {
     return runCatching { Color(android.graphics.Color.parseColor("#$hex")) }.getOrNull()
 }
 
+/** Live games always show the score; finished ones only with "Show scores" on. */
 private fun scoreLine(m: Match, showScores: Boolean) =
-    if (showScores && m.state != "pre" && m.homeScore != null) "${m.home} ${m.homeScore} – ${m.awayScore} ${m.away}"
+    if ((m.state == "in" || (showScores && m.state == "post")) && m.homeScore != null) "${m.home} ${m.homeScore} – ${m.awayScore} ${m.away}"
     else m.title
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -410,8 +462,8 @@ private fun MatchScreen(m: Match, teams: List<Team>, showScores: Boolean, onBack
             Modifier.fillMaxSize().padding(pad).verticalScroll(rememberScrollState()).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text(m.league, style = MaterialTheme.typography.labelLarge)
-            Text(scoreLine(m, showScores), style = MaterialTheme.typography.headlineSmall)
+            Text(m.league, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+            Text(scoreLine(m, showScores), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
             Text(listOf(m.statusLabel, m.localTime()).filter { it.isNotBlank() }.joinToString(" · "),
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
             HorizontalDivider()

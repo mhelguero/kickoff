@@ -9,9 +9,7 @@ import android.util.Log
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
-import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
-import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
@@ -188,10 +186,19 @@ object Tracker {
         setWatchAlarm(context, maxOf(next, now + 1000))
     }
 
-    /** While watching: a fallback alarm that restarts watching if the system kills the app mid-game. */
-    fun armWatchdog(context: Context) = setWatchAlarm(context, System.currentTimeMillis() + 10 * MIN)
+    /**
+     * One watch step, run from the alarm: polls live games and, while any still needs watching,
+     * sets the next alarm a minute out. Exact alarms keep firing while the phone sleeps, so no
+     * foreground service (and no permanent notification) is needed.
+     */
+    fun watchTick(context: Context) {
+        if (gamesToWatch().isEmpty()) return scheduleNextWatch(context)
+        // Set first: if this poll is cut short, the next minute's alarm still comes.
+        setWatchAlarm(context, System.currentTimeMillis() + MIN)
+        if (!pollOnce(context)) scheduleNextWatch(context)
+    }
 
-    // One alarm slot: the next-kickoff alarm and the watchdog replace each other.
+    // One alarm slot: the next-kickoff alarm and the per-minute watch alarm replace each other.
     private fun setWatchAlarm(context: Context, at: Long) {
         val am = context.getSystemService(AlarmManager::class.java)
         val pi = PendingIntent.getBroadcast(
@@ -205,41 +212,12 @@ object Tracker {
         }
         Log.i(TAG, "watch alarm at $at")
     }
-
-    /** Start live polling: a foreground service if allowed, else a WorkManager chain. */
-    fun startWatching(context: Context) {
-        try {
-            context.startForegroundService(Intent(context, WatchService::class.java))
-        } catch (e: Exception) {
-            Log.w(TAG, "can't start service, falling back to WorkManager", e)
-            // KEEP: if a poll chain is already running, it is already watching.
-            enqueuePoll(context, 0, ExistingWorkPolicy.KEEP)
-        }
-    }
-
-    fun enqueuePoll(context: Context, delayMs: Long, policy: ExistingWorkPolicy = ExistingWorkPolicy.APPEND_OR_REPLACE) {
-        val req = OneTimeWorkRequestBuilder<PollWorker>()
-            .setInitialDelay(delayMs, TimeUnit.MILLISECONDS)
-            .setConstraints(Constraints(requiredNetworkType = NetworkType.CONNECTED))
-            .build()
-        // APPEND: PollWorker enqueues its own next run, and REPLACE would cancel the running one.
-        WorkManager.getInstance(context).enqueueUniqueWork("poll", policy, req)
-    }
 }
 
 class RefreshWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
     override suspend fun doWork(): Result {
         Store.init(applicationContext)
         Tracker.refresh(applicationContext)
-        return Result.success()
-    }
-}
-
-class PollWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
-    override suspend fun doWork(): Result {
-        Store.init(applicationContext)
-        if (Tracker.pollOnce(applicationContext)) Tracker.enqueuePoll(applicationContext, MIN)
-        else Tracker.scheduleNextWatch(applicationContext)
         return Result.success()
     }
 }

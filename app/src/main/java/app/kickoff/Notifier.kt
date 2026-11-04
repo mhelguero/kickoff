@@ -1,7 +1,6 @@
 package app.kickoff
 
 import android.Manifest
-import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -14,9 +13,7 @@ import androidx.core.app.NotificationManagerCompat
 
 object Notifier {
     const val CH_GAMES = "games"
-    const val CH_WATCHING = "watching"
     const val EXTRA_MATCH_ID = "matchId"
-    const val WATCHING_ID = 1
 
     fun createChannels(context: Context) {
         val nm = context.getSystemService(NotificationManager::class.java)
@@ -24,10 +21,8 @@ object Notifier {
             NotificationChannel(CH_GAMES, "Game alerts", NotificationManager.IMPORTANCE_HIGH)
                 .apply { description = "Kickoff, second half and full time" }
         )
-        nm.createNotificationChannel(
-            NotificationChannel(CH_WATCHING, "Live tracking", NotificationManager.IMPORTANCE_MIN)
-                .apply { description = "Shown while a game is being tracked" }
-        )
+        // Older versions showed a permanent "Tracking live" notification on this channel.
+        nm.deleteNotificationChannel("watching")
     }
 
     fun gameAlert(context: Context, match: Match, phase: Int, showScores: Boolean) {
@@ -41,15 +36,6 @@ object Notifier {
         val text = listOf(match.league, watch).filter { it.isNotBlank() }.joinToString(" · ")
         post(context, match.id.hashCode(), title, text, openMatchIntent(context, match.id))
     }
-
-    fun watching(context: Context, games: List<Match>): Notification =
-        NotificationCompat.Builder(context, CH_WATCHING)
-            .setSmallIcon(R.drawable.ic_ball)
-            .setContentTitle("Tracking live: " + games.joinToString(", ") { it.title }.ifEmpty { "games" })
-            .setOngoing(true)
-            .setSilent(true)
-            .setContentIntent(openMatchIntent(context, null))
-            .build()
 
     private fun post(context: Context, id: Int, title: String, text: String, intent: PendingIntent) {
         if (Build.VERSION.SDK_INT >= 33 &&

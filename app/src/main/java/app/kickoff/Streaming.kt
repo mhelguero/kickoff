@@ -79,10 +79,18 @@ object Streaming {
      * Bolivian league games fall back to Entel Gol, which holds the exclusive rights.
      */
     fun channels(match: Match): List<Channel> {
-        val all = match.broadcasts.map { Channel(it.name, "USA") }
+        var all = match.broadcasts.map { Channel(it.name, "USA") }
         if (all.isEmpty() && match.leagueSlug.startsWith("bol.")) return listOf(Channel("Entel Gol", "Bolivia"))
+        // ESPN lists only the English-language rights holder (Paramount+) for UEFA club games, but
+        // TUDN/ViX hold the US Spanish-language rights and stream every game on ViX Premium.
+        val vix = providers.first { it.packages.contains("com.univision.prendetv") }
+        if (match.leagueSlug in VIX_UEFA && all.none { vix.matches(it.name) }) {
+            all = all + Channel("ViX Premium", "USA")
+        }
         return all.distinctBy { it.country.lowercase() to it.name.lowercase() }
     }
+
+    private val VIX_UEFA = setOf("uefa.champions", "uefa.europa", "uefa.europa.conf")
 
     /** Channels grouped by country, this phone's country first. */
     fun byCountry(match: Match): List<Pair<String, List<Channel>>> =
