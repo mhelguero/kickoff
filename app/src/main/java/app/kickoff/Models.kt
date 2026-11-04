@@ -3,7 +3,13 @@ package app.kickoff
 import kotlinx.serialization.Serializable
 
 @Serializable
-data class Team(val id: String, val name: String, val league: String = "", val color: String = "")
+data class Team(
+    val id: String,
+    val name: String,
+    val league: String = "",
+    val color: String = "",
+    val sofaId: String = "",            // SofaScore team id, found by name search; used for channel listings
+)
 
 @Serializable
 data class Broadcast(val name: String, val kind: String = "")
@@ -26,6 +32,8 @@ data class Match(
     val broadcasts: List<Broadcast> = emptyList(),
     val teamIds: List<String> = emptyList(),
     val timeValid: Boolean = true,      // false when ESPN has a date but no confirmed kickoff time
+    val sofaEventId: String = "",       // the same game on SofaScore
+    val tvIds: Map<String, List<Int>> = emptyMap(), // SofaScore channel ids by country code ("US", "ES", ...)
 ) {
     val title get() = "$home vs $away"
 
@@ -64,7 +72,7 @@ data class AlertState(
     val read: Boolean = false,     // the user opened one of this game's notifications
 )
 
-/** A TV channel or streaming service and the country it's shown in (e.g. "Entel Gol", "Bolivia"). */
+/** A TV channel or streaming service and the country code it's shown in (e.g. "ViX", "US"). */
 data class Channel(val name: String, val country: String)
 
 @Serializable
@@ -75,6 +83,8 @@ data class AppState(
     val scoreboardChecked: Set<String> = emptySet(),   // team ids already checked for a game in progress
     val showScores: Boolean = false,
     val lastRefresh: Long = 0,
+    val channelNames: Map<Int, String> = emptyMap(),   // SofaScore channel id to name, for ids in tvIds
+    val tvStatus: String = "",                         // last SofaScore problem, "" when it worked
 )
 
 // ESPN's Bolívar color (3c96c4) is darker than the club's light blue.

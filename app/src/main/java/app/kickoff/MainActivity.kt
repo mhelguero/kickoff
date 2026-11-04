@@ -231,7 +231,7 @@ private fun Root(openMatch: String?, onOpenMatch: (String?) -> Unit, needsSetup:
     val match = openMatch?.let { state.matches[it] }
     if (match != null) {
         BackHandler { onOpenMatch(null) }
-        MatchScreen(match, state.teams, state.showScores, onBack = { onOpenMatch(null) })
+        MatchScreen(match, state.teams, state.showScores, state.channelNames, onBack = { onOpenMatch(null) })
     } else {
         HomeScreen(state, refreshing, ::refresh, onOpenMatch, needsSetup, onFixSetup)
     }
@@ -315,7 +315,7 @@ private fun HomeScreen(
             }
             games.groupBy { it.zoned().toLocalDate() }.forEach { (day, dayGames) ->
                 item(key = "day-$day") { DayDivider(dividerFmt.format(day)) }
-                items(dayGames, key = { it.id }) { m -> GameCard(m, state.teams, state.showScores) { onOpenMatch(m.id) } }
+                items(dayGames, key = { it.id }) { m -> GameCard(m, state.teams, state.showScores, state.channelNames) { onOpenMatch(m.id) } }
             }
             item {
                 HorizontalDivider()
@@ -339,7 +339,8 @@ private fun HomeScreen(
                 }) { Text("Send a test notification") }
                 Text(
                     "Alerts: kickoff always; 2nd half and full time only until you open one of that game's alerts. " +
-                        "Channels come from ESPN (US listings). Other countries: Live Soccer TV link on each game.",
+                        "Channels come from SofaScore (every country) and ESPN (US)." +
+                        state.tvStatus.ifBlank { null }?.let { " SofaScore listings unavailable ($it): showing ESPN's only." }.orEmpty(),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 8.dp),
@@ -371,7 +372,7 @@ private fun HomeScreen(
 }
 
 @Composable
-private fun GameCard(m: Match, teams: List<Team>, showScores: Boolean, onClick: () -> Unit) {
+private fun GameCard(m: Match, teams: List<Team>, showScores: Boolean, names: Map<Int, String>, onClick: () -> Unit) {
     val live = m.state == "in"
     val background = teamColor(m, teams)
     // Dark text on light team colors, white on dark ones (0.18 is where the two contrast equally).
@@ -398,7 +399,7 @@ private fun GameCard(m: Match, teams: List<Team>, showScores: Boolean, onClick: 
             Spacer(Modifier.height(8.dp))
             Text(scoreLine(m, showScores), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(8.dp))
-            Text("📺 " + Streaming.summary(m).ifEmpty { "Broadcaster not listed yet" }, style = MaterialTheme.typography.bodyLarge,
+            Text("📺 " + Streaming.summary(m, names).ifEmpty { "Broadcaster not listed yet" }, style = MaterialTheme.typography.bodyLarge,
                 color = content.copy(alpha = 0.8f))
         }
     }
@@ -443,13 +444,30 @@ private fun scoreLine(m: Match, showScores: Boolean) =
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun MatchScreen(m: Match, teams: List<Team>, showScores: Boolean, onBack: () -> Unit) {
+private fun MatchScreen(m: Match, teams: List<Team>, showScores: Boolean, names: Map<Int, String>, onBack: () -> Unit) {
     val context = LocalContext.current
-    val groups = Streaming.byCountry(m)
-    val mine = groups.firstOrNull { it.first == Streaming.myCountry }?.second.orEmpty()
-    val others = groups.filter { it.first != Streaming.myCountry }
-    // Big games list dozens of countries; only open that list by default when it's short.
-    var showOthers by remember(m.id) { mutableStateOf(mine.isEmpty() || others.sumOf { it.second.size } <= 8) }
+    val groups = Streaming.byCountry(m, names)
+    val mine = groups.firstOrNull { it.first == Streaming.myCountryCode }?.second.orEmpty()
+    val others = groups.filter { it.first != Streaming.myCountryCode }
+        .sortedBy { Streaming.countryName(it.first) }
+    // Big games list dozens of countries; only open that list by default when it's short. Decided
+    // from what's listed now (names keep loading), until the user taps the toggle.
+    var showOthersChoice by remember(m.id) { mutableStateOf<Boolean?>(null) }
+    val showOthers = showOthersChoice ?: (mine.isEmpty() || others.sumOf { it.second.size } <= 8)
+    // Only this phone's country's channel names are fetched in the background; load the rest now.
+    var loadingNames by remember(m.id) { mutableStateOf(false) }
+    LaunchedEffect(m.id) {
+        val known = Store.state.value.channelNames
+        val countries = m.tvIds.filterValues { ids -> ids.any { it !in known } }.keys
+        if (countries.isEmpty()) return@LaunchedEffect
+        loadingNames = true
+        val learned = Sofa.namesFor(countries)
+        Store.update { s ->
+            val used = s.matches.values.flatMap { it.tvIds.values.flatten() }.toSet()
+            s.copy(channelNames = s.channelNames + learned.filterKeys { it in used })
+        }
+        loadingNames = false
+    }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -467,21 +485,22 @@ private fun MatchScreen(m: Match, teams: List<Team>, showScores: Boolean, onBack
             Text(listOf(m.statusLabel, m.localTime()).filter { it.isNotBlank() }.joinToString(" · "),
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
             HorizontalDivider()
-            if (groups.isEmpty()) Text("No channel listed for this game yet.")
+            if (groups.isEmpty() && !loadingNames) Text("No channel listed for this game yet.")
+            if (loadingNames) Text("Loading channels…", color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (mine.isNotEmpty()) {
                 Text("In ${Streaming.myCountry}", style = MaterialTheme.typography.titleSmall)
                 ChannelCards(mine)
             }
             if (others.isNotEmpty()) {
-                if (mine.isNotEmpty()) TextButton(onClick = { showOthers = !showOthers }) {
+                if (mine.isNotEmpty()) TextButton(onClick = { showOthersChoice = !showOthers }) {
                     Text(if (showOthers) "Hide other countries" else "Show other countries (${others.size})")
                 }
                 if (showOthers) others.forEach { (country, list) ->
-                    Text(country.ifBlank { "Other" }, style = MaterialTheme.typography.titleSmall)
+                    Text(Streaming.countryName(country), style = MaterialTheme.typography.titleSmall)
                     ChannelCards(list)
                 }
             }
-            // Opens in the browser; Live Soccer TV lists channels in every country, which ESPN doesn't.
+            // Opens in the browser: a second opinion when SofaScore is missing a channel.
             TextButton(onClick = { Streaming.openUrl(context, Streaming.liveSoccerTvUrl(m, teams)) }) {
                 Text("See channels in every country on Live Soccer TV")
             }

@@ -57,51 +57,49 @@ object Streaming {
     )
 
     /**
-     * This phone's country as Live Soccer TV names it ("USA", "Bolivia", ...), from the mobile
-     * network (where the phone is), falling back to the language setting. Only decides which
-     * country's channels are listed first; Open buttons don't depend on it.
+     * This phone's country code ("US", "BO", ...) from the mobile network (where the phone is),
+     * falling back to the language setting. Only decides which country's channels are listed first;
+     * Open buttons don't depend on it.
      */
-    var myCountry: String = "USA"
+    var myCountryCode: String = "US"
         private set
+    val myCountry get() = countryName(myCountryCode)
 
     fun detectCountry(context: Context) {
         val network = context.getSystemService(TelephonyManager::class.java)?.networkCountryIso.orEmpty()
-        val code = network.ifBlank { Locale.getDefault().country }.uppercase()
-        myCountry = when (code) {
-            "US", "" -> "USA"
-            "GB" -> "UK"
-            else -> Locale("", code).getDisplayCountry(Locale.ENGLISH)
-        }
+        myCountryCode = network.ifBlank { Locale.getDefault().country }.uppercase().ifBlank { "US" }
+    }
+
+    fun countryName(code: String) = when (code) {
+        "US" -> "USA"
+        "GB" -> "UK"
+        else -> Locale("", code).getDisplayCountry(Locale.ENGLISH).ifBlank { code }
     }
 
     /**
-     * Every known channel for a game. ESPN only lists US channels.
-     * Bolivian league games fall back to Entel Gol, which holds the exclusive rights.
+     * Every known channel for a game: SofaScore's listings for every country, plus ESPN's US ones.
+     * [names] is SofaScore's channel id to name; ids without a name yet are left out.
      */
-    fun channels(match: Match): List<Channel> {
-        var all = match.broadcasts.map { Channel(it.name, "USA") }
-        if (all.isEmpty() && match.leagueSlug.startsWith("bol.")) return listOf(Channel("Entel Gol", "Bolivia"))
-        // ESPN lists only the English-language rights holder (Paramount+) for UEFA club games, but
-        // TUDN/ViX hold the US Spanish-language rights and stream every game on ViX Premium.
-        val vix = providers.first { it.packages.contains("com.univision.prendetv") }
-        if (match.leagueSlug in VIX_UEFA && all.none { vix.matches(it.name) }) {
-            all = all + Channel("ViX Premium", "USA")
-        }
-        return all.distinctBy { it.country.lowercase() to it.name.lowercase() }
+    fun channels(match: Match, names: Map<Int, String>): List<Channel> {
+        val espn = match.broadcasts.map { Channel(it.name, "US") }
+        val sofa = match.tvIds.flatMap { (country, ids) -> ids.mapNotNull { names[it] }.map { Channel(it, country) } }
+        return (espn + sofa).distinctBy { it.country to sameName(it.name) }
     }
 
-    private val VIX_UEFA = setOf("uefa.champions", "uefa.europa", "uefa.europa.conf")
+    /** "Paramount+" and "Paramount Plus" are the same service. */
+    private fun sameName(name: String) =
+        name.lowercase().replace("plus", "+").filter { it.isLetterOrDigit() || it == '+' }
 
-    /** Channels grouped by country, this phone's country first. */
-    fun byCountry(match: Match): List<Pair<String, List<Channel>>> =
-        channels(match).groupBy { it.country }.toList()
-            .sortedBy { (country, _) -> if (country == myCountry) 0 else 1 }
+    /** Channels grouped by country code, this phone's country first. */
+    fun byCountry(match: Match, names: Map<Int, String>): List<Pair<String, List<Channel>>> =
+        channels(match, names).groupBy { it.country }.toList()
+            .sortedBy { (country, _) -> if (country == myCountryCode) 0 else 1 }
 
-    /** Short text for notifications and the game list, e.g. "Apple TV" or "Entel Gol (Bolivia)". */
-    fun summary(match: Match): String {
-        val (country, list) = byCountry(match).firstOrNull() ?: return ""
-        val names = list.joinToString(", ") { it.name }
-        return if (country == myCountry) names else "$names ($country)"
+    /** Short text for notifications and the game list, e.g. "Paramount+, ViX" or "Entel Gol (Bolivia)". */
+    fun summary(match: Match, names: Map<Int, String>): String {
+        val (country, list) = byCountry(match, names).firstOrNull() ?: return ""
+        val text = list.joinToString(", ") { it.name }
+        return if (country == myCountryCode) text else "$text (${countryName(country)})"
     }
 
     /** Slow (reads every installed app's name): call off the main thread. */
