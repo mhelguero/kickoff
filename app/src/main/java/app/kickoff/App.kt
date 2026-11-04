@@ -7,6 +7,7 @@ class App : Application() {
         super.onCreate()
         Store.init(this)
         Notifier.createChannels(this)
+        Streaming.detectCountry(this)
         Tracker.schedulePeriodicRefresh(this)
     }
 }

@@ -4,6 +4,7 @@ import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.telephony.TelephonyManager
 import java.net.URLEncoder
 import java.time.Instant
 import java.time.ZoneId
@@ -19,37 +20,58 @@ data class WatchOption(
 
 object Streaming {
     /**
-     * [keys] match the channel name; [packages] are the known Android apps; [labels] find the app by
-     * its home-screen name if the package differs. [anyCountry] apps get a button even when the
-     * listing is for another country (e.g. Entel Gol is Bolivian but its app is the same everywhere).
+     * [keys] are found anywhere in the channel name, [exact] must be the whole name (short names like
+     * "Tele" or "Max" would match too much otherwise); [packages] are the known Android apps;
+     * [labels] find the app by its home-screen name if the package differs.
      */
     private class Provider(
         val keys: List<String>,
         val packages: List<String>,
         val labels: List<String>,
-        val anyCountry: Boolean = false,
-    )
+        val exact: List<String> = emptyList(),
+    ) {
+        fun matches(channel: String) = channel.lowercase().let { n -> n in exact || keys.any { n.contains(it) } }
+    }
 
     private val providers = listOf(
-        Provider(listOf("peacock", "telemundo", "universo"), listOf("com.peacocktv.peacockandroid"), listOf("peacock")),
+        // Peacock streams NBC, USA Network and Telemundo/Universo soccer (ESPN calls Telemundo "Tele").
+        Provider(listOf("peacock", "telemundo", "universo", "nbc", "usa net"), listOf("com.peacocktv.peacockandroid"),
+            listOf("peacock"), exact = listOf("tele")),
         Provider(listOf("apple tv", "mls season pass"), listOf("com.apple.atve.androidtv.appletv"), listOf("apple tv")),
         Provider(listOf("espn"), listOf("com.espn.score_center"), listOf("espn")),
         Provider(listOf("paramount", "cbs", "golazo"), listOf("com.cbs.app"), listOf("paramount+")),
         Provider(listOf("fox", "fs1", "fs2"), listOf("com.foxsports.android"), listOf("fox one", "fox sports")),
         Provider(listOf("vix", "tudn", "univision", "unimás", "unimas"), listOf("com.univision.prendetv"), listOf("vix")),
+        // HBO Max carries the TNT Sports channels (TNT, truTV, TBS).
+        Provider(listOf("hbo max", "tnt", "trutv", "tbs"), listOf("com.wbd.stream"), listOf("hbo max", "max"),
+            exact = listOf("max")),
+        Provider(listOf("prime video"), listOf("com.amazon.avod.thirdpartyclient"), listOf("prime video")),
+        Provider(listOf("youtube"), listOf("com.google.android.youtube"), listOf("youtube")),
+        Provider(listOf("flosports", "flofootball"), emptyList(), listOf("flosports")),
         Provider(listOf("dazn"), listOf("com.dazn"), listOf("dazn")),
         Provider(listOf("fubo"), listOf("com.fubo.mobile"), listOf("fubo")),
         Provider(listOf("bein"), emptyList(), listOf("bein")),
-        Provider(listOf("entel"), emptyList(), listOf("entel tv", "entel gol"), anyCountry = true),
-        Provider(listOf("tigo"), emptyList(), listOf("tigo sports"), anyCountry = true),
-        Provider(listOf("fanatiz"), emptyList(), listOf("fanatiz"), anyCountry = true),
+        Provider(listOf("entel"), emptyList(), listOf("entel tv", "entel gol")),
+        Provider(listOf("tigo"), emptyList(), listOf("tigo sports")),
+        Provider(listOf("fanatiz"), emptyList(), listOf("fanatiz")),
     )
 
-    /** This phone's country as Live Soccer TV names it ("USA", "Bolivia", ...). */
-    val myCountry: String = when (val c = Locale.getDefault().country) {
-        "US", "" -> "USA"
-        "GB" -> "UK"
-        else -> Locale("", c).getDisplayCountry(Locale.ENGLISH)
+    /**
+     * This phone's country as Live Soccer TV names it ("USA", "Bolivia", ...), from the mobile
+     * network (where the phone is), falling back to the language setting. Only decides which
+     * country's channels are listed first; Open buttons don't depend on it.
+     */
+    var myCountry: String = "USA"
+        private set
+
+    fun detectCountry(context: Context) {
+        val network = context.getSystemService(TelephonyManager::class.java)?.networkCountryIso.orEmpty()
+        val code = network.ifBlank { Locale.getDefault().country }.uppercase()
+        myCountry = when (code) {
+            "US", "" -> "USA"
+            "GB" -> "UK"
+            else -> Locale("", code).getDisplayCountry(Locale.ENGLISH)
+        }
     }
 
     /**
@@ -74,21 +96,28 @@ object Streaming {
         return if (country == myCountry) names else "$names ($country)"
     }
 
-    fun options(context: Context, channels: List<Channel>): List<WatchOption> = channels.map { ch ->
-        val provider = providers.firstOrNull { p -> p.keys.any { ch.name.lowercase().contains(it) } }
-        val usable = provider != null && (ch.country == myCountry || provider.anyCountry)
-        WatchOption(ch.name, ch.country, if (usable) installedApp(context, provider!!) else null)
-    }
-
-    private fun installedApp(context: Context, p: Provider): Intent? {
+    /** Slow (reads every installed app's name): call off the main thread. */
+    fun options(context: Context, channels: List<Channel>): List<WatchOption> {
         val pm = context.packageManager
-        p.packages.firstNotNullOfOrNull { pm.getLaunchIntentForPackage(it) }?.let { return it }
-        val launcher = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-        val app = pm.queryIntentActivities(launcher, 0).firstOrNull { ri ->
-            val label = ri.loadLabel(pm).toString().lowercase()
-            p.labels.any { label.startsWith(it) }
-        } ?: return null
-        return pm.getLaunchIntentForPackage(app.activityInfo.packageName)
+        // Home-screen names of installed apps, loaded at most once per call and only if needed.
+        val launcherApps by lazy {
+            val launcher = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+            pm.queryIntentActivities(launcher, 0)
+                .map { it.loadLabel(pm).toString().lowercase() to it.activityInfo.packageName }
+        }
+        fun installedApp(p: Provider): Intent? {
+            p.packages.firstNotNullOfOrNull { pm.getLaunchIntentForPackage(it) }?.let { return it }
+            // "fantasy" skips e.g. ESPN Fantasy, which can't play games.
+            val pkg = launcherApps.firstOrNull { (label, _) ->
+                "fantasy" !in label && p.labels.any { label == it || label.startsWith("$it ") || label.startsWith("$it+") }
+            }?.second
+            return pkg?.let { pm.getLaunchIntentForPackage(it) }
+        }
+        return channels.map { ch ->
+            // Installed is all that matters: the phone's region setting is often not where the user is.
+            val provider = providers.firstOrNull { it.matches(ch.name) }
+            WatchOption(ch.name, ch.country, provider?.let { installedApp(it) })
+        }
     }
 
     /** Web search for this exact game, in Spanish for South American competitions. */

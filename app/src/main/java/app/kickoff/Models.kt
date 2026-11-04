@@ -3,7 +3,7 @@ package app.kickoff
 import kotlinx.serialization.Serializable
 
 @Serializable
-data class Team(val id: String, val name: String)
+data class Team(val id: String, val name: String, val league: String = "")
 
 @Serializable
 data class Broadcast(val name: String, val kind: String = "")
@@ -25,6 +25,7 @@ data class Match(
     val clock: String = "",
     val broadcasts: List<Broadcast> = emptyList(),
     val teamIds: List<String> = emptyList(),
+    val timeValid: Boolean = true,      // false when ESPN has a date but no confirmed kickoff time
 ) {
     val title get() = "$home vs $away"
 
@@ -33,7 +34,7 @@ data class Match(
         get() = when {
             state == "post" -> Phase.ENDED
             state == "in" && period >= 2 && statusName != "STATUS_HALFTIME" -> Phase.SECOND_HALF
-            state == "in" -> Phase.FIRST_HALF
+            state == "in" && statusName != "STATUS_DELAYED" -> Phase.FIRST_HALF
             else -> Phase.NONE
         }
 
@@ -71,12 +72,13 @@ data class AppState(
     val teams: List<Team> = DEFAULT_TEAMS,
     val matches: Map<String, Match> = emptyMap(),
     val alerts: Map<String, AlertState> = emptyMap(),
+    val scoreboardChecked: Set<String> = emptySet(),   // team ids already checked for a game in progress
     val showScores: Boolean = false,
     val lastRefresh: Long = 0,
 )
 
 val DEFAULT_TEAMS = listOf(
-    Team("86", "Real Madrid"),
-    Team("6077", "Houston Dynamo FC"),
-    Team("2681", "Bolívar"),
+    Team("86", "Real Madrid", "LALIGA"),
+    Team("6077", "Houston Dynamo FC", "MLS"),
+    Team("2681", "Bolívar", "Bolivian Liga Profesional"),
 )

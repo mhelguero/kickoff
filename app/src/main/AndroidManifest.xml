@@ -24,6 +24,9 @@
         <package android:name="com.univision.prendetv" />
         <package android:name="com.dazn" />
         <package android:name="com.fubo.mobile" />
+        <package android:name="com.wbd.stream" />
+        <package android:name="com.amazon.avod.thirdpartyclient" />
+        <package android:name="com.google.android.youtube" />
         <!-- Lets Kickoff find streaming apps by their home-screen name too. -->
         <intent>
             <action android:name="android.intent.action.MAIN" />

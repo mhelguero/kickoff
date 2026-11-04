@@ -1,6 +1,7 @@
 package app.kickoff
 
 import android.content.Context
+import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.json.Json
@@ -25,9 +26,13 @@ object Store {
         val next = change(_state.value)
         if (next != _state.value) {
             _state.value = next
-            val tmp = File(file.parentFile, "state.json.tmp")
-            tmp.writeText(json.encodeToString(AppState.serializer(), next))
-            tmp.renameTo(file)
+            // A failed save (e.g. storage full) must not crash a background service; the in-memory
+            // state stays correct and the next update tries again.
+            runCatching {
+                val tmp = File(file.parentFile, "state.json.tmp")
+                tmp.writeText(json.encodeToString(AppState.serializer(), next))
+                check(tmp.renameTo(file)) { "rename failed" }
+            }.onFailure { Log.w("Store", "save failed", it) }
         }
         return next
     }

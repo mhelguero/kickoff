@@ -15,7 +15,11 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.concurrent.TimeUnit
+import kotlin.math.abs
 
 private const val TAG = "Tracker"
 private const val MIN = 60_000L
@@ -24,6 +28,8 @@ private const val HOUR = 60 * MIN
 /** Start watching a little before kickoff; give up on a game this long after its scheduled start. */
 const val WATCH_LEAD_MS = 3 * MIN
 const val WATCH_MAX_MS = 4 * HOUR
+private val ESPN_DAY_ZONE = ZoneId.of("America/New_York")
+private const val PRE_GRACE_MS = 90 * MIN
 
 object Tracker {
 
@@ -31,20 +37,51 @@ object Tracker {
     fun refresh(context: Context) {
         val teams = Store.state.value.teams
         val fresh = mutableMapOf<String, Match>()
+        val now = System.currentTimeMillis()
         for (team in teams) {
             runCatching { Espn.fixtures(team.id) }
                 .onSuccess { list -> list.forEach { fresh[it.id] = it } }
                 .onFailure { Log.w(TAG, "fixtures ${team.name} failed", it) }
         }
-        val now = System.currentTimeMillis()
+        // A game already under way isn't in the fixtures list. Teams with nothing stored yet (just
+        // added, or first launch) may be mid-game, so check the scoreboards for the last few hours.
+        val newTeams = teams.map { it.id }.filter { it !in Store.state.value.scoreboardChecked }.toSet()
+        var scoreboardOk = true
+        if (newTeams.isNotEmpty()) {
+            // ESPN's scoreboard days run on US Eastern time, not UTC.
+            val days = listOf(now - WATCH_MAX_MS, now).map {
+                DateTimeFormatter.ofPattern("yyyyMMdd").format(Instant.ofEpochMilli(it).atZone(ESPN_DAY_ZONE))
+            }.distinct()
+            for (day in days) {
+                runCatching { Espn.scoreboard(day) }
+                    .onSuccess { list ->
+                        // Only games under way: upcoming ones come from fixtures, and a game that ended
+                        // before the team was followed shouldn't send a "has ended" alert.
+                        list.filter { m -> m.state == "in" && m.teamIds.any { it in newTeams } }
+                            .forEach { fresh.putIfAbsent(it.id, it) }
+                    }
+                    .onFailure { scoreboardOk = false; Log.w(TAG, "scoreboard $day failed", it) }
+            }
+        }
+        // Games we stopped expecting (kickoff delayed past the grace period, or no confirmed time):
+        // the fixtures list drops a game once it's under way, so ask ESPN about each one directly.
+        for (m in Store.state.value.matches.values) {
+            val delayed = m.state == "pre" && now > m.dateMillis + PRE_GRACE_MS && now < m.dateMillis + WATCH_MAX_MS
+            val unconfirmed = !m.timeValid && m.state == "pre" && abs(now - m.dateMillis) < 24 * HOUR
+            if (delayed || unconfirmed) runCatching { Espn.match(m.id) }.onSuccess { fresh[m.id] = it }
+        }
         val updated = Store.update { s ->
             val followed = s.teams.map { it.id }.toSet()
-            val kept = (s.matches + fresh).filterValues { m ->
+            val merged = fresh.mapValues { (id, f) -> mergeRefresh(s.matches[id], f) }
+            val kept = (s.matches + merged).filterValues { m ->
                 m.dateMillis > now - 2 * 24 * HOUR && m.teamIds.any { it in followed }
             }
             s.copy(
                 matches = kept,
                 alerts = s.alerts.filterKeys { it in kept },
+                // Checked once per team; dropped when unfollowed so re-adding checks again.
+                scoreboardChecked = (s.scoreboardChecked + if (scoreboardOk) newTeams else emptySet())
+                    .filter { it in followed }.toSet(),
                 lastRefresh = now,
             )
         }
@@ -52,15 +89,33 @@ object Tracker {
         scheduleNextWatch(context)
     }
 
+    /**
+     * Could this game need watching now or later? Skips games without a confirmed kickoff time
+     * (unless already live), and gives up on one still not started 90 minutes after its scheduled
+     * time; refresh checks those directly and brings them back once they're live.
+     */
+    private fun stillOpen(m: Match, s: AppState, now: Long) =
+        (m.timeValid || m.state == "in") && m.state != "post" &&
+            (s.alerts[m.id]?.phase ?: Phase.NONE) < Phase.ENDED &&
+            now <= m.dateMillis + if (m.state == "pre") PRE_GRACE_MS else WATCH_MAX_MS
+
+    /**
+     * The schedule can lag behind live polling: don't let it move a game backwards (finished to live
+     * to not started) at the same kickoff time, and keep channels we already know when it has none.
+     * A new kickoff time means the game was rescheduled, so the fresh data wins.
+     */
+    private fun mergeRefresh(old: Match?, fresh: Match): Match {
+        if (old == null) return fresh
+        val broadcasts = fresh.broadcasts.ifEmpty { old.broadcasts }
+        fun rank(m: Match) = when (m.state) { "pre" -> 0; "in" -> 1; else -> 2 }
+        val keepOld = rank(old) > rank(fresh) && old.dateMillis == fresh.dateMillis
+        return (if (keepOld) old else fresh).copy(broadcasts = broadcasts)
+    }
+
     /** Games that need live polling right now. */
     fun gamesToWatch(now: Long = System.currentTimeMillis()): List<Match> {
         val s = Store.state.value
-        return s.matches.values.filter { m ->
-            m.dateMillis - WATCH_LEAD_MS <= now &&
-                now <= m.dateMillis + WATCH_MAX_MS &&
-                (s.alerts[m.id]?.phase ?: Phase.NONE) < Phase.ENDED &&
-                !(m.state == "post")
-        }
+        return s.matches.values.filter { m -> m.dateMillis - WATCH_LEAD_MS <= now && stillOpen(m, s, now) }
     }
 
     /** One polling pass over live games. Returns true if any game still needs watching. */
@@ -71,7 +126,8 @@ object Tracker {
                 .getOrNull() ?: continue
             // Summary has no broadcasts for some games; keep what the schedule gave us.
             val merged = live.copy(broadcasts = live.broadcasts.ifEmpty { m.broadcasts })
-            Store.update { it.copy(matches = it.matches + (m.id to merged)) }
+            // Skip if a refresh removed the game meanwhile (its team was unfollowed).
+            if (m.id !in Store.update { st -> if (m.id in st.matches) st.copy(matches = st.matches + (m.id to merged)) else st }.matches) continue
             handleTransition(context, merged)
         }
         return gamesToWatch().isNotEmpty()
@@ -83,18 +139,21 @@ object Tracker {
      */
     private fun handleTransition(context: Context, match: Match) {
         val phase = match.phase
-        val s = Store.state.value
-        val alert = s.alerts[match.id] ?: AlertState()
-        if (phase <= alert.phase) return
         val now = System.currentTimeMillis()
-        // Don't alert about games that ended long ago (e.g. phone was off) or were postponed.
+        // Do not alert about games that ended long ago (e.g. the phone was off).
         val stale = now > match.dateMillis + WATCH_MAX_MS
-        val postponed = match.state == "post" && !match.completed
-        val shouldNotify = !stale && !postponed && !alert.read
-        Store.update {
-            it.copy(alerts = it.alerts + (match.id to alert.copy(phase = phase, notified = alert.notified || shouldNotify)))
+        // Postponed/canceled: no alert, and no phase recorded, so a rescheduled game still alerts.
+        if (match.state == "post" && !match.completed) return
+        // Decide inside the store lock, so a notification tap (markRead) or a second poller running
+        // at the same time can't be overwritten or cause a duplicate alert.
+        var shouldNotify = false
+        val updated = Store.update { st ->
+            val alert = st.alerts[match.id] ?: AlertState()
+            if (phase <= alert.phase) return@update st
+            shouldNotify = !stale && !alert.read
+            st.copy(alerts = st.alerts + (match.id to alert.copy(phase = phase, notified = alert.notified || shouldNotify)))
         }
-        if (shouldNotify) Notifier.gameAlert(context, match, phase, s.showScores)
+        if (shouldNotify) Notifier.gameAlert(context, match, phase, updated.showScores)
     }
 
     // ---- scheduling ----
@@ -111,10 +170,18 @@ object Tracker {
     fun scheduleNextWatch(context: Context) {
         val now = System.currentTimeMillis()
         val s = Store.state.value
+        // Same rule as gamesToWatch, so an alarm never fires for a game it then won't watch.
         val next = s.matches.values
-            .filter { (s.alerts[it.id]?.phase ?: 0) < Phase.ENDED && it.dateMillis + WATCH_MAX_MS > now && it.state != "post" }
+            .filter { stillOpen(it, s, now) }
             .minOfOrNull { it.dateMillis - WATCH_LEAD_MS } ?: return
-        val at = maxOf(next, now + 1000)
+        setWatchAlarm(context, maxOf(next, now + 1000))
+    }
+
+    /** While watching: a fallback alarm that restarts watching if the system kills the app mid-game. */
+    fun armWatchdog(context: Context) = setWatchAlarm(context, System.currentTimeMillis() + 10 * MIN)
+
+    // One alarm slot: the next-kickoff alarm and the watchdog replace each other.
+    private fun setWatchAlarm(context: Context, at: Long) {
         val am = context.getSystemService(AlarmManager::class.java)
         val pi = PendingIntent.getBroadcast(
             context, 0, Intent(context, AlarmReceiver::class.java),
@@ -125,7 +192,7 @@ object Tracker {
         } else {
             am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
         }
-        Log.i(TAG, "next watch alarm at $at")
+        Log.i(TAG, "watch alarm at $at")
     }
 
     /** Start live polling: a foreground service if allowed, else a WorkManager chain. */
@@ -134,16 +201,18 @@ object Tracker {
             context.startForegroundService(Intent(context, WatchService::class.java))
         } catch (e: Exception) {
             Log.w(TAG, "can't start service, falling back to WorkManager", e)
-            enqueuePoll(context, 0)
+            // KEEP: if a poll chain is already running, it is already watching.
+            enqueuePoll(context, 0, ExistingWorkPolicy.KEEP)
         }
     }
 
-    fun enqueuePoll(context: Context, delayMs: Long) {
+    fun enqueuePoll(context: Context, delayMs: Long, policy: ExistingWorkPolicy = ExistingWorkPolicy.APPEND_OR_REPLACE) {
         val req = OneTimeWorkRequestBuilder<PollWorker>()
             .setInitialDelay(delayMs, TimeUnit.MILLISECONDS)
             .setConstraints(Constraints(requiredNetworkType = NetworkType.CONNECTED))
             .build()
-        WorkManager.getInstance(context).enqueueUniqueWork("poll", ExistingWorkPolicy.REPLACE, req)
+        // APPEND: PollWorker enqueues its own next run, and REPLACE would cancel the running one.
+        WorkManager.getInstance(context).enqueueUniqueWork("poll", policy, req)
     }
 }
 

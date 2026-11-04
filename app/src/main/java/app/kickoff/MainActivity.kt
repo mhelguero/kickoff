@@ -3,6 +3,8 @@ package app.kickoff
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.AlarmManager
+import android.app.NotificationManager
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -10,11 +12,13 @@ import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.app.NotificationManagerCompat
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
@@ -65,6 +69,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -83,6 +88,15 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
+private const val KEY_OPEN_MATCH = "openMatch"
+
+/** App notifications on, and the game-alerts channel not switched off (any Android version). */
+private fun notificationsOn(context: Context): Boolean {
+    val nm = NotificationManagerCompat.from(context)
+    return nm.areNotificationsEnabled() &&
+        nm.getNotificationChannel(Notifier.CH_GAMES)?.importance != NotificationManager.IMPORTANCE_NONE
+}
+
 class MainActivity : ComponentActivity() {
     /** Game to show, set when the app is opened from a notification. */
     private val openMatch = mutableStateOf<String?>(null)
@@ -94,7 +108,10 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        handleIntent(intent)
+        // On recreation (rotation, process restart) restore the open game instead of re-reading the
+        // launch intent, which would reopen an old notification's game.
+        if (savedInstanceState != null) openMatch.value = savedInstanceState.getString(KEY_OPEN_MATCH)
+        else if (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY == 0) handleIntent(intent)
         if (Build.VERSION.SDK_INT >= 33 && !hasNotificationPermission()) {
             askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
@@ -102,12 +119,18 @@ class MainActivity : ComponentActivity() {
             AppTheme {
                 Root(
                     openMatch = openMatch.value,
-                    onOpenMatch = { id -> id?.let(Store::markRead); openMatch.value = id },
+                    // Only tapping a notification counts as reading it (handleIntent); browsing the list doesn't.
+                    onOpenMatch = { id -> openMatch.value = id },
                     needsSetup = needsSetup.value,
                     onFixSetup = ::fixSetup,
                 )
             }
         }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putString(KEY_OPEN_MATCH, openMatch.value)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -137,18 +160,31 @@ class MainActivity : ComponentActivity() {
         getSystemService(AlarmManager::class.java).canScheduleExactAlarms()
 
     private fun checkSetup() {
-        needsSetup.value = !hasNotificationPermission() || !ignoringBattery() || !exactAlarms()
+        needsSetup.value = !notificationsOn(this) || !ignoringBattery() || !exactAlarms()
     }
 
     @SuppressLint("BatteryLife")
     private fun fixSetup() {
-        val intent = when {
-            !hasNotificationPermission() -> Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
-                .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
-            !exactAlarms() && Build.VERSION.SDK_INT >= 31 -> Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:$packageName"))
-            else -> Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName"))
-        }
-        runCatching { startActivity(intent) }
+        val pkg = Uri.parse("package:$packageName")
+        val appNotifications = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+        // Each step lists screens to try in order; some phone makers remove or block the first one.
+        val tries = when {
+            !hasNotificationPermission() || !NotificationManagerCompat.from(this).areNotificationsEnabled() ->
+                listOf(appNotifications)
+            !notificationsOn(this) -> listOf(
+                Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+                    .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+                    .putExtra(Settings.EXTRA_CHANNEL_ID, Notifier.CH_GAMES),
+                appNotifications,
+            )
+            !exactAlarms() && Build.VERSION.SDK_INT >= 31 ->
+                listOf(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, pkg))
+            else -> listOf(
+                Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, pkg),
+                Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS),
+            )
+        } + Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, pkg)
+        tries.firstOrNull { runCatching { startActivity(it) }.isSuccess }
     }
 }
 
@@ -171,20 +207,18 @@ private fun Root(openMatch: String?, onOpenMatch: (String?) -> Unit, needsSetup:
         if (refreshing) return
         refreshing = true
         scope.launch {
-            withContext(Dispatchers.IO) { Tracker.refresh(context) }
+            // Run again if teams changed mid-refresh (e.g. two teams added quickly).
+            do {
+                val teams = Store.state.value.teams
+                withContext(Dispatchers.IO) { Tracker.refresh(context) }
+            } while (Store.state.value.teams != teams)
             if (Tracker.gamesToWatch().isNotEmpty()) Tracker.startWatching(context)
             refreshing = false
         }
     }
 
+    // Live scores reach the list through Store; WatchService does the polling while a game is on.
     LaunchedEffect(state.teams) { refresh() }
-    // Keep the list fresh while the app is open and a game is live.
-    LaunchedEffect(Unit) {
-        while (true) {
-            delay(60_000)
-            if (Tracker.gamesToWatch().isNotEmpty()) withContext(Dispatchers.IO) { Tracker.pollOnce(context) }
-        }
-    }
 
     val match = openMatch?.let { state.matches[it] }
     if (match != null) {
@@ -210,6 +244,7 @@ private fun HomeScreen(
 ) {
     val context = LocalContext.current
     var showSearch by remember { mutableStateOf(false) }
+    var removing by remember { mutableStateOf<Team?>(null) }
     val now = System.currentTimeMillis()
     val games = state.matches.values
         .filter { it.dateMillis + WATCH_MAX_MS > now || it.state == "in" }
@@ -250,9 +285,7 @@ private fun HomeScreen(
                             onClick = {},
                             label = { Text(team.name) },
                             trailingIcon = {
-                                Icon(Icons.Default.Close, "Remove", Modifier.size(18.dp).clickable {
-                                    Store.update { s -> s.copy(teams = s.teams - team) }
-                                })
+                                Icon(Icons.Default.Close, "Remove", Modifier.size(18.dp).clickable { removing = team })
                             },
                         )
                     }
@@ -279,9 +312,14 @@ private fun HomeScreen(
                     Switch(state.showScores, onCheckedChange = { v -> Store.update { it.copy(showScores = v) } })
                 }
                 OutlinedButton(onClick = {
-                    val sample = games.firstOrNull() ?: Match("test", now, "Real Madrid", "Valencia", league = "LALIGA",
-                        broadcasts = listOf(Broadcast("ESPN+", "STREAMING")))
-                    Notifier.gameAlert(context, sample, Phase.FIRST_HALF, false)
+                    // Separate id, so it never replaces a real game's alert or marks that game read.
+                    val sample = (games.firstOrNull() ?: Match("", now, "Real Madrid", "Valencia", league = "LALIGA",
+                        broadcasts = listOf(Broadcast("ESPN+", "STREAMING")))).copy(id = "test")
+                    if (notificationsOn(context)) {
+                        Notifier.gameAlert(context, sample, Phase.FIRST_HALF, false)
+                    } else {
+                        Toast.makeText(context, "Notifications are off for Kickoff. Tap Fix above.", Toast.LENGTH_LONG).show()
+                    }
                 }) { Text("Send a test notification") }
                 Text(
                     "Alerts: kickoff always; 2nd half and full time only until you open one of that game's alerts. " +
@@ -294,6 +332,26 @@ private fun HomeScreen(
         }
     }
     if (showSearch) TeamSearchDialog(onDismiss = { showSearch = false })
+    removing?.let { team ->
+        AlertDialog(
+            onDismissRequest = { removing = null },
+            title = { Text("Stop following ${team.name}?") },
+            text = { Text("You won't get alerts for its games anymore.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    // Drop its games right away too, so a game being tracked live stops alerting.
+                    Store.update { s ->
+                        val teams = s.teams.filter { it.id != team.id }
+                        val ids = teams.map { it.id }.toSet()
+                        val matches = s.matches.filterValues { m -> m.teamIds.any { it in ids } }
+                        s.copy(teams = teams, matches = matches, alerts = s.alerts.filterKeys { it in matches })
+                    }
+                    removing = null
+                }) { Text("Remove") }
+            },
+            dismissButton = { TextButton(onClick = { removing = null }) { Text("Cancel") } },
+        )
+    }
 }
 
 @Composable
@@ -379,8 +437,11 @@ private fun MatchScreen(m: Match, teams: List<Team>, showScores: Boolean, onBack
 @Composable
 private fun ChannelCards(channels: List<Channel>) {
     val context = LocalContext.current
-    // Re-checked each time the screen opens, so a newly installed app gets its button.
-    val options = remember(channels) { Streaming.options(context, channels) }
+    // Names show right away; buttons appear once the (slow) installed-app check finishes off the main
+    // thread. Re-checked each time the screen opens, so a newly installed app gets its button.
+    val options by produceState(channels.map { WatchOption(it.name, it.country, null) }, channels) {
+        value = withContext(Dispatchers.IO) { Streaming.options(context, channels) }
+    }
     options.forEach { o ->
         Card(Modifier.fillMaxWidth()) {
             Row(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -400,25 +461,44 @@ private fun TeamSearchDialog(onDismiss: () -> Unit) {
     var query by remember { mutableStateOf("") }
     var results by remember { mutableStateOf<List<Team>>(emptyList()) }
     var loading by remember { mutableStateOf(false) }
+    var failed by remember { mutableStateOf(false) }
+    val followed = Store.state.collectAsStateWithLifecycle().value.teams.map { it.id }.toSet()
     LaunchedEffect(query) {
-        if (query.length < 3) { results = emptyList(); return@LaunchedEffect }
+        failed = false
+        if (query.trim().length < 3) { results = emptyList(); loading = false; return@LaunchedEffect }
         delay(400)
         loading = true
-        results = withContext(Dispatchers.IO) { runCatching { Espn.searchTeams(query) }.getOrDefault(emptyList()) }
+        val r = withContext(Dispatchers.IO) { runCatching { Espn.searchTeams(query.trim()) } }
+        results = r.getOrDefault(emptyList())
+        failed = r.isFailure
         loading = false
     }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Add a team") },
         text = {
-            Column {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
                 OutlinedTextField(query, { query = it }, label = { Text("Team name") }, singleLine = true)
-                if (loading) Text("Searching…", Modifier.padding(top = 8.dp))
+                val hint = when {
+                    loading -> "Searching…"
+                    failed -> "Couldn't search. Check your connection."
+                    query.trim().length >= 3 && results.isEmpty() -> "No soccer teams found."
+                    else -> null
+                }
+                hint?.let { Text(it, Modifier.padding(top = 8.dp), color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 results.forEach { t ->
-                    Text(t.name, Modifier.fillMaxWidth().clickable {
+                    val already = t.id in followed
+                    Column(Modifier.fillMaxWidth().clickable(enabled = !already) {
                         Store.update { s -> if (s.teams.any { it.id == t.id }) s else s.copy(teams = s.teams + t) }
                         onDismiss()
-                    }.padding(vertical = 12.dp))
+                    }.padding(vertical = 10.dp)) {
+                        Text(t.name, style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            listOf(t.league, if (already) "Following" else "").filter { it.isNotBlank() }.joinToString(" · "),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
         },

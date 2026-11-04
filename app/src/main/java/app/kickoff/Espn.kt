@@ -16,9 +16,18 @@ object Espn {
     private const val BASE = "https://site.api.espn.com/apis/site/v2/sports/soccer/all"
     private val json = Json { ignoreUnknownKeys = true }
 
-    /** Upcoming and in-progress games for a team. */
-    fun fixtures(teamId: String): List<Match> {
-        val root = get("$BASE/teams/$teamId/schedule?fixture=true").obj
+    /** Upcoming games for a team. ESPN drops a game from this list once it's under way. */
+    fun fixtures(teamId: String): List<Match> = schedule("$BASE/teams/$teamId/schedule?fixture=true")
+
+    /**
+     * Every soccer game on a UTC day (yyyyMMdd), including ones under way. Large (~800 KB), so only
+     * used to catch a game already live for a newly followed team. League is filled in by the first poll.
+     */
+    // Without a limit ESPN returns only the first 100 games, which a busy Saturday exceeds.
+    fun scoreboard(day: String): List<Match> = schedule("$BASE/scoreboard?dates=$day&limit=1000")
+
+    private fun schedule(url: String): List<Match> {
+        val root = get(url).obj
         return root["events"].arr.mapNotNull { e ->
             runCatching { parseEvent(e.obj, e.obj["competitions"].arr.first().obj, e.obj["league"]?.obj) }
                 .getOrNull()
@@ -34,15 +43,17 @@ object Espn {
 
     fun searchTeams(query: String): List<Team> {
         val q = URLEncoder.encode(query, "UTF-8")
-        val root = get("https://site.web.api.espn.com/apis/search/v2?query=$q&limit=15&type=team").obj
+        val root = get("https://site.web.api.espn.com/apis/search/v2?query=$q&limit=50&type=team").obj
         return root["results"].arr.flatMap { it.obj["contents"].arr }
             .map { it.obj }
             .filter { it.str("sport") == "soccer" }
             .mapNotNull { c ->
                 val id = c.str("uid")?.substringAfter("~t:", "")?.takeIf { it.isNotEmpty() }
                 val name = c.str("displayName")
-                if (id == null || name == null) null else Team(id, name)
+                // subtitle is the league, e.g. "LALIGA" vs "Liga F" for the two Barcelonas.
+                if (id == null || name == null) null else Team(id, name, c.str("subtitle") ?: "")
             }
+            .distinctBy { it.id }
     }
 
     private fun parseEvent(event: JsonObject, comp: JsonObject, league: JsonObject?): Match {
@@ -51,9 +62,11 @@ object Espn {
         val away = competitors.firstOrNull { it.str("homeAway") == "away" } ?: competitors[1]
         val status = (comp["status"] ?: event["status"]).obj
         val type = status["type"].obj
-        val broadcasts = comp["broadcasts"].arr.mapNotNull { b ->
-            val name = b.obj["media"]?.obj?.str("shortName") ?: return@mapNotNull null
-            Broadcast(name, b.obj["type"]?.obj?.str("shortName") ?: "")
+        // Schedule and summary: {media: {shortName}, type: {shortName}}. Scoreboard: {names: [...]}.
+        val broadcasts = comp["broadcasts"].arr.flatMap { b ->
+            val name = b.obj["media"]?.obj?.str("shortName")
+            if (name != null) listOf(Broadcast(name, b.obj["type"]?.obj?.str("shortName") ?: ""))
+            else b.obj["names"].arr.mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.let { n -> Broadcast(n) } }
         }.distinctBy { it.name }
         return Match(
             id = event.str("id") ?: comp.str("id")!!,
@@ -71,6 +84,7 @@ object Espn {
             clock = status.str("displayClock") ?: "",
             broadcasts = broadcasts,
             teamIds = competitors.mapNotNull { it["team"].obj.str("id") },
+            timeValid = ((comp["timeValid"] ?: event["timeValid"]) as? JsonPrimitive)?.contentOrNull != "false",
         )
     }
 
