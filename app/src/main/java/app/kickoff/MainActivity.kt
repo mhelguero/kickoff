@@ -69,10 +69,12 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -258,6 +260,7 @@ private fun HomeScreen(
     val context = LocalContext.current
     var showSearch by remember { mutableStateOf(false) }
     var removing by remember { mutableStateOf<Team?>(null) }
+    var testStep by rememberSaveable { mutableIntStateOf(0) }
     val now = System.currentTimeMillis()
     val today = LocalDate.now()
     val sorted = state.matches.values.sortedBy { it.dateMillis }
@@ -310,9 +313,10 @@ private fun HomeScreen(
                         leadingIcon = { Icon(Icons.Default.Add, null, Modifier.size(18.dp)) })
                 }
             }
-            item(key = "live-header") { SectionHeader("Live") }
-            if (live.isEmpty()) item { Hint("No games on right now.") }
-            items(live, key = { it.id }) { m -> GameCard(m, state.teams) { onOpenMatch(m.id) } }
+            if (live.isNotEmpty()) {
+                item(key = "live-header") { SectionHeader("Live") }
+                items(live, key = { it.id }) { m -> GameCard(m, state.teams) { onOpenMatch(m.id) } }
+            }
             if (ended.isNotEmpty()) {
                 item(key = "ended-header") { SectionHeader("Ended") }
                 items(ended, key = { it.id }) { m -> GameCard(m, state.teams) { onOpenMatch(m.id) } }
@@ -326,10 +330,15 @@ private fun HomeScreen(
             item {
                 OutlinedButton(onClick = {
                     // Separate id, so it never replaces a real game's alert or marks that game read.
-                    val sample = ((live + upcoming).firstOrNull() ?: Match("", now, "Real Madrid", "Valencia", league = "LALIGA",
-                        tv = mapOf(Streaming.COUNTRY to listOf("ESPN+")))).copy(id = "test")
+                    val base = (live + upcoming).firstOrNull() ?: Match("", now, "Real Madrid", "Valencia", league = "LALIGA",
+                        tv = mapOf(Streaming.COUNTRY to listOf("ESPN+")))
+                    // Each tap shows the next alert of a game: kickoff, 2nd half, full time, then kickoff again.
+                    val phase = testPhases[testStep % testPhases.size]
+                    val score = when (phase) { Phase.SECOND_HALF -> "1" to "0"; Phase.ENDED -> "2" to "1"; else -> null }
+                    val sample = base.copy(id = "test", homeScore = score?.first, awayScore = score?.second)
                     if (notificationsOn(context)) {
-                        Notifier.gameAlert(context, sample, Phase.FIRST_HALF)
+                        Notifier.gameAlert(context, sample, phase)
+                        testStep++
                     } else {
                         Toast.makeText(context, "Notifications are off for Kickoff. Tap Fix above.", Toast.LENGTH_LONG).show()
                     }
@@ -409,6 +418,8 @@ private fun LiveBadge(label: String) {
             .padding(horizontal = 8.dp, vertical = 2.dp),
     )
 }
+
+private val testPhases = listOf(Phase.FIRST_HALF, Phase.SECOND_HALF, Phase.ENDED)
 
 @Composable
 private fun SectionHeader(title: String) {
