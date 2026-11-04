@@ -30,9 +30,11 @@ object Notifier {
         val title = when (phase) {
             Phase.FIRST_HALF -> "${match.title} has started!"
             Phase.SECOND_HALF -> "${match.title}$score: 2nd half has started!"
-            else -> "${match.title}$score has ended"
+            else -> "Ended: ${match.title}$score"
         }
-        val watch = Streaming.summary(match).let { if (it.isEmpty()) "Tap to see where to watch" else "On $it" }
+        // Where to watch only matters while the game is on.
+        val watch = if (phase == Phase.ENDED) ""
+        else Streaming.summary(match).let { if (it.isEmpty()) "Tap to see where to watch" else "On $it" }
         val text = listOf(match.league, watch).filter { it.isNotBlank() }.joinToString(" · ")
         post(context, match.id.hashCode(), title, text, openMatchIntent(context, match.id))
     }
