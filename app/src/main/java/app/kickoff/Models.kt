@@ -8,7 +8,7 @@ data class Team(
     val name: String,
     val league: String = "",
     val color: String = "",
-    val sofaId: String = "",            // SofaScore team id, found by name search; used for channel listings
+    val fotmobId: String = "",          // FotMob team id, found by name search; used for channel listings
 )
 
 @Serializable
@@ -32,8 +32,8 @@ data class Match(
     val broadcasts: List<Broadcast> = emptyList(),
     val teamIds: List<String> = emptyList(),
     val timeValid: Boolean = true,      // false when ESPN has a date but no confirmed kickoff time
-    val sofaEventId: String = "",       // the same game on SofaScore
-    val tvIds: Map<String, List<Int>> = emptyMap(), // SofaScore channel ids by country code ("US", "ES", ...)
+    val fotmobId: String = "",          // the same game on FotMob
+    val tv: Map<String, List<String>> = emptyMap(), // FotMob channels by country code ("US", "ES", ...)
 ) {
     val title get() = "$home vs $away"
 
@@ -83,8 +83,7 @@ data class AppState(
     val scoreboardChecked: Set<String> = emptySet(),   // team ids already checked for a game in progress
     val showScores: Boolean = false,
     val lastRefresh: Long = 0,
-    val channelNames: Map<Int, String> = emptyMap(),   // SofaScore channel id to name, for ids in tvIds
-    val tvStatus: String = "",                         // last SofaScore problem, "" when it worked
+    val tvStatus: String = "",                         // how the last FotMob channel lookup went
 )
 
 // ESPN's Bolívar color (3c96c4) is darker than the club's light blue.

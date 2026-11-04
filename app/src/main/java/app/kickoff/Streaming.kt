@@ -77,13 +77,13 @@ object Streaming {
     }
 
     /**
-     * Every known channel for a game: SofaScore's listings for every country, plus ESPN's US ones.
-     * [names] is SofaScore's channel id to name; ids without a name yet are left out.
+     * Every known channel for a game: FotMob's listings per country. ESPN's (US only) fill in when
+     * FotMob has nothing for the US, since FotMob's list is the more complete and up to date one.
      */
-    fun channels(match: Match, names: Map<Int, String>): List<Channel> {
-        val espn = match.broadcasts.map { Channel(it.name, "US") }
-        val sofa = match.tvIds.flatMap { (country, ids) -> ids.mapNotNull { names[it] }.map { Channel(it, country) } }
-        return (espn + sofa).distinctBy { it.country to sameName(it.name) }
+    fun channels(match: Match): List<Channel> {
+        val fotmob = match.tv.flatMap { (country, names) -> names.map { Channel(it, country) } }
+        val espn = if (match.tv["US"].isNullOrEmpty()) match.broadcasts.map { Channel(it.name, "US") } else emptyList()
+        return (fotmob + espn).distinctBy { it.country to sameName(it.name) }
     }
 
     /** "Paramount+" and "Paramount Plus" are the same service. */
@@ -91,13 +91,13 @@ object Streaming {
         name.lowercase().replace("plus", "+").filter { it.isLetterOrDigit() || it == '+' }
 
     /** Channels grouped by country code, this phone's country first. */
-    fun byCountry(match: Match, names: Map<Int, String>): List<Pair<String, List<Channel>>> =
-        channels(match, names).groupBy { it.country }.toList()
+    fun byCountry(match: Match): List<Pair<String, List<Channel>>> =
+        channels(match).groupBy { it.country }.toList()
             .sortedBy { (country, _) -> if (country == myCountryCode) 0 else 1 }
 
     /** Short text for notifications and the game list, e.g. "Paramount+, ViX" or "Entel Gol (Bolivia)". */
-    fun summary(match: Match, names: Map<Int, String>): String {
-        val (country, list) = byCountry(match, names).firstOrNull() ?: return ""
+    fun summary(match: Match): String {
+        val (country, list) = byCountry(match).firstOrNull() ?: return ""
         val text = list.joinToString(", ") { it.name }
         return if (country == myCountryCode) text else "$text (${countryName(country)})"
     }

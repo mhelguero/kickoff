@@ -231,7 +231,7 @@ private fun Root(openMatch: String?, onOpenMatch: (String?) -> Unit, needsSetup:
     val match = openMatch?.let { state.matches[it] }
     if (match != null) {
         BackHandler { onOpenMatch(null) }
-        MatchScreen(match, state.teams, state.showScores, state.channelNames, onBack = { onOpenMatch(null) })
+        MatchScreen(match, state.teams, state.showScores, onBack = { onOpenMatch(null) })
     } else {
         HomeScreen(state, refreshing, ::refresh, onOpenMatch, needsSetup, onFixSetup)
     }
@@ -315,7 +315,7 @@ private fun HomeScreen(
             }
             games.groupBy { it.zoned().toLocalDate() }.forEach { (day, dayGames) ->
                 item(key = "day-$day") { DayDivider(dividerFmt.format(day)) }
-                items(dayGames, key = { it.id }) { m -> GameCard(m, state.teams, state.showScores, state.channelNames) { onOpenMatch(m.id) } }
+                items(dayGames, key = { it.id }) { m -> GameCard(m, state.teams, state.showScores) { onOpenMatch(m.id) } }
             }
             item {
                 HorizontalDivider()
@@ -339,8 +339,8 @@ private fun HomeScreen(
                 }) { Text("Send a test notification") }
                 Text(
                     "Alerts: kickoff always; 2nd half and full time only until you open one of that game's alerts. " +
-                        "Channels come from SofaScore (every country) and ESPN (US)." +
-                        state.tvStatus.ifBlank { null }?.let { "\nSofaScore check: $it" }.orEmpty(),
+                        "Channels come from FotMob (every country) and ESPN (US)." +
+                        state.tvStatus.ifBlank { null }?.let { "\nFotMob check: $it" }.orEmpty(),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 8.dp),
@@ -372,7 +372,7 @@ private fun HomeScreen(
 }
 
 @Composable
-private fun GameCard(m: Match, teams: List<Team>, showScores: Boolean, names: Map<Int, String>, onClick: () -> Unit) {
+private fun GameCard(m: Match, teams: List<Team>, showScores: Boolean, onClick: () -> Unit) {
     val live = m.state == "in"
     val background = teamColor(m, teams)
     // Dark text on light team colors, white on dark ones (0.18 is where the two contrast equally).
@@ -399,7 +399,7 @@ private fun GameCard(m: Match, teams: List<Team>, showScores: Boolean, names: Ma
             Spacer(Modifier.height(8.dp))
             Text(scoreLine(m, showScores), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(8.dp))
-            Text("📺 " + Streaming.summary(m, names).ifEmpty { "Broadcaster not listed yet" }, style = MaterialTheme.typography.bodyLarge,
+            Text("📺 " + Streaming.summary(m).ifEmpty { "Broadcaster not listed yet" }, style = MaterialTheme.typography.bodyLarge,
                 color = content.copy(alpha = 0.8f))
         }
     }
@@ -444,29 +444,31 @@ private fun scoreLine(m: Match, showScores: Boolean) =
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun MatchScreen(m: Match, teams: List<Team>, showScores: Boolean, names: Map<Int, String>, onBack: () -> Unit) {
+private fun MatchScreen(m: Match, teams: List<Team>, showScores: Boolean, onBack: () -> Unit) {
     val context = LocalContext.current
-    val groups = Streaming.byCountry(m, names)
+    val groups = Streaming.byCountry(m)
     val mine = groups.firstOrNull { it.first == Streaming.myCountryCode }?.second.orEmpty()
     val others = groups.filter { it.first != Streaming.myCountryCode }
         .sortedBy { Streaming.countryName(it.first) }
-    // Big games list dozens of countries; only open that list by default when it's short. Decided
-    // from what's listed now (names keep loading), until the user taps the toggle.
-    var showOthersChoice by remember(m.id) { mutableStateOf<Boolean?>(null) }
-    val showOthers = showOthersChoice ?: (mine.isEmpty() || others.sumOf { it.second.size } <= 8)
-    // Only this phone's country's channel names are fetched in the background; load the rest now.
-    var loadingNames by remember(m.id) { mutableStateOf(false) }
-    LaunchedEffect(m.id) {
-        val known = Store.state.value.channelNames
-        val countries = m.tvIds.filterValues { ids -> ids.any { it !in known } }.keys
-        if (countries.isEmpty()) return@LaunchedEffect
-        loadingNames = true
-        val learned = Sofa.namesFor(countries)
-        Store.update { s ->
-            val used = s.matches.values.flatMap { it.tvIds.values.flatten() }.toSet()
-            s.copy(channelNames = s.channelNames + learned.filterKeys { it in used })
+    // Other countries take ~250 requests (one per country), so they load only when asked for.
+    var showOthers by remember(m.id) { mutableStateOf(false) }
+    var loadingOthers by remember(m.id) { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    fun loadOthers() {
+        if (loadingOthers || m.fotmobId.isBlank()) return
+        loadingOthers = true
+        scope.launch {
+            val all = FotMob.allCountries(m.fotmobId)
+            // Replaces the other countries' listings; this phone's keeps what refresh found if its
+            // request failed here (refresh keeps that one current).
+            val my = Streaming.myCountryCode
+            Store.update { s ->
+                val cur = s.matches[m.id] ?: return@update s
+                val mine = all[my] ?: cur.tv[my]
+                s.copy(matches = s.matches + (m.id to cur.copy(tv = if (mine != null) all + (my to mine) else all)))
+            }
+            loadingOthers = false
         }
-        loadingNames = false
     }
     Scaffold(
         topBar = {
@@ -485,22 +487,26 @@ private fun MatchScreen(m: Match, teams: List<Team>, showScores: Boolean, names:
             Text(listOf(m.statusLabel, m.localTime()).filter { it.isNotBlank() }.joinToString(" · "),
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
             HorizontalDivider()
-            if (groups.isEmpty() && !loadingNames) Text("No channel listed for this game yet.")
-            if (loadingNames) Text("Loading channels…", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            if (mine.isNotEmpty()) {
+            if (mine.isEmpty()) Text("No channel listed in ${Streaming.myCountry} for this game yet.")
+            else {
                 Text("In ${Streaming.myCountry}", style = MaterialTheme.typography.titleSmall)
                 ChannelCards(mine)
             }
-            if (others.isNotEmpty()) {
-                if (mine.isNotEmpty()) TextButton(onClick = { showOthersChoice = !showOthers }) {
-                    Text(if (showOthers) "Hide other countries" else "Show other countries (${others.size})")
+            // Only FotMob lists other countries; ESPN's US listing alone isn't worth a button.
+            if (m.fotmobId.isNotBlank() || others.isNotEmpty()) {
+                TextButton(onClick = { showOthers = !showOthers; if (showOthers) loadOthers() }) {
+                    Text(if (showOthers) "Hide other countries" else "Show other countries")
                 }
-                if (showOthers) others.forEach { (country, list) ->
+            }
+            if (showOthers) {
+                if (loadingOthers) Text("Checking every country…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                else if (others.isEmpty()) Text("No channels listed in other countries.")
+                others.forEach { (country, list) ->
                     Text(Streaming.countryName(country), style = MaterialTheme.typography.titleSmall)
                     ChannelCards(list)
                 }
             }
-            // Opens in the browser: a second opinion when SofaScore is missing a channel.
+            // Opens in the browser: a second opinion when FotMob is missing a channel.
             TextButton(onClick = { Streaming.openUrl(context, Streaming.liveSoccerTvUrl(m, teams)) }) {
                 Text("See channels in every country on Live Soccer TV")
             }

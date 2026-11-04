@@ -90,67 +90,52 @@ object Tracker {
     }
 
     /**
-     * Every channel and streaming service showing each game, from SofaScore (all countries).
-     * Re-checked while a game is within two days, since channels get added late. Failures leave
-     * what we had, and are shown on the home screen so a blocked source is visible.
+     * Every channel and streaming service showing each game in this phone's country, from FotMob.
+     * Re-checked while a game is within two days, since channels get added late. Other countries
+     * load when a game is opened. Failures keep what we had; the home screen shows how it went.
      */
     private fun findChannels(now: Long) {
         var problem = ""
         // Each step's error, named, so the status line shows where listings stop.
         fun failed(step: String): (Throwable) -> Unit = { e ->
             problem = "$step: ${e.message ?: e.javaClass.simpleName}".take(120)
-            Log.w(TAG, "SofaScore $step", e)
+            Log.w(TAG, "FotMob $step", e)
         }
 
-        for (team in Store.state.value.teams.filter { it.sofaId.isBlank() }) {
-            val id = runCatching { Sofa.findTeam(team.name) }.onFailure(failed("team search")).getOrNull() ?: continue
-            Store.update { s -> s.copy(teams = s.teams.map { if (it.id == team.id) it.copy(sofaId = id) else it }) }
+        for (team in Store.state.value.teams.filter { it.fotmobId.isBlank() }) {
+            val id = runCatching { FotMob.findTeam(team.name) }.onFailure(failed("team search")).getOrNull() ?: continue
+            Store.update { s -> s.copy(teams = s.teams.map { if (it.id == team.id) it.copy(fotmobId = id) else it }) }
         }
         val s0 = Store.state.value
-        val events = mutableMapOf<String, List<Sofa.Event>>()   // ESPN team id to its SofaScore games
-        for (team in s0.teams.filter { it.sofaId.isNotBlank() }) {
-            runCatching { Sofa.teamEvents(team.sofaId) }.onSuccess { events[team.id] = it }.onFailure(failed("games"))
+        val fixtures = mutableMapOf<String, List<FotMob.Fixture>>()   // ESPN team id to its FotMob games
+        for (team in s0.teams.filter { it.fotmobId.isNotBlank() }) {
+            runCatching { FotMob.fixtures(team.fotmobId) }.onSuccess { fixtures[team.id] = it }.onFailure(failed("games"))
         }
-        val teamsFound = "${s0.teams.count { it.sofaId.isNotBlank() }}/${s0.teams.size} teams"
+        val teamsFound = "${s0.teams.count { it.fotmobId.isNotBlank() }}/${s0.teams.size} teams"
         // Refused outright (e.g. HTTP 403): don't send a request per game that will be refused too.
-        if (events.isEmpty() && problem.isNotEmpty()) {
+        if (fixtures.isEmpty() && problem.isNotEmpty()) {
             Store.update { it.copy(tvStatus = "$teamsFound. Error: $problem") }
             return
         }
-        val found = mutableMapOf<String, Pair<String, Map<String, List<Int>>>>()  // match id to (event, tvIds)
-        val names = mutableMapOf<Int, String>()
+        val my = Streaming.myCountryCode
+        val found = mutableMapOf<String, Pair<String, List<String>>>()  // match id to (FotMob id, channels here)
         for (m in s0.matches.values) {
             if (m.state == "post" || m.dateMillis > now + 14 * 24 * HOUR) continue
-            if (m.tvIds.isNotEmpty() && m.dateMillis > now + 2 * 24 * HOUR) continue
+            if (my in m.tv && m.dateMillis > now + 2 * 24 * HOUR) continue
             // Same team, kickoff within 3 hours: a team never plays twice that close together.
-            val event = m.sofaEventId.ifBlank { null } ?: s0.teams.filter { it.id in m.teamIds }
-                .flatMap { events[it.id].orEmpty() }
+            val fid = m.fotmobId.ifBlank { null } ?: s0.teams.filter { it.id in m.teamIds }
+                .flatMap { fixtures[it.id].orEmpty() }
                 .firstOrNull { abs(it.startMillis - m.dateMillis) <= 3 * HOUR }?.id ?: continue
-            runCatching { Sofa.countryChannels(event) }
-                .onSuccess { (ids, n) -> found[m.id] = event to ids; names += n }
-                .onFailure(failed("channels"))
+            runCatching { FotMob.channels(fid, my) }.onSuccess { found[m.id] = fid to it }.onFailure(failed("channels"))
         }
-        // Names for this phone's country now (cards and alerts show them); other countries load
-        // when a game is opened.
-        val my = Streaming.myCountryCode
-        val myIds = (found.values.map { it.second } + s0.matches.values.map { it.tvIds })
-            .flatMap { it[my].orEmpty() }.toSet()
-        fun missing() = myIds.filter { it !in names && it !in s0.channelNames }
-        if (missing().isNotEmpty()) runCatching { names += Sofa.channelNames(my) }.onFailure(failed("channel names"))
-        for (id in missing().take(20)) {
-            runCatching { Sofa.channelName(id) }.onSuccess { n -> if (n != null) names[id] = n }.onFailure(failed("channel name"))
-        }
-        val withTv = found.values.count { it.second.isNotEmpty() }
-        val status = "$teamsFound, ${events.values.sumOf { it.size }} games, ${found.size} matched, " +
-            "$withTv with channels, ${myIds.size - missing().size}/${myIds.size} $my names" +
-            problem.ifBlank { null }?.let { ". Error: $it" }.orEmpty()
+        val status = "$teamsFound, ${found.size} games checked, ${found.values.count { it.second.isNotEmpty() }} " +
+            "with channels in ${Streaming.myCountry}" + problem.ifBlank { null }?.let { ". Error: $it" }.orEmpty()
         Store.update { s ->
             val matches = s.matches.mapValues { (id, m) ->
-                found[id]?.let { (event, ids) -> m.copy(sofaEventId = event, tvIds = ids) } ?: m
+                // An empty list is kept too: it records that this country was checked.
+                found[id]?.let { (fid, list) -> m.copy(fotmobId = fid, tv = m.tv + (my to list)) } ?: m
             }
-            // Keep names only for channels some stored game uses.
-            val used = matches.values.flatMap { it.tvIds.values.flatten() }.toSet()
-            s.copy(matches = matches, channelNames = (s.channelNames + names).filterKeys { it in used }, tvStatus = status)
+            s.copy(matches = matches, tvStatus = status)
         }
     }
 
@@ -184,9 +169,9 @@ object Tracker {
         val broadcasts = fresh.broadcasts.ifEmpty { old.broadcasts }
         fun rank(m: Match) = when (m.state) { "pre" -> 0; "in" -> 1; else -> 2 }
         val keepOld = rank(old) > rank(fresh) && old.dateMillis == fresh.dateMillis
-        // ESPN knows nothing of SofaScore's listings; keep them.
+        // ESPN knows nothing of FotMob's listings; keep them.
         return (if (keepOld) old else fresh)
-            .copy(broadcasts = broadcasts, sofaEventId = old.sofaEventId, tvIds = old.tvIds)
+            .copy(broadcasts = broadcasts, fotmobId = old.fotmobId, tv = old.tv)
     }
 
     /** Games that need live polling right now. */
@@ -208,7 +193,7 @@ object Tracker {
                 val cur = st.matches[m.id] ?: return@update st
                 // Summary has no broadcasts for some games; keep what the schedule gave us.
                 val next = live.copy(broadcasts = live.broadcasts.ifEmpty { cur.broadcasts },
-                    sofaEventId = cur.sofaEventId, tvIds = cur.tvIds)
+                    fotmobId = cur.fotmobId, tv = cur.tv)
                 merged = next
                 st.copy(matches = st.matches + (m.id to next))
             }
