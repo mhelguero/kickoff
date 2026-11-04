@@ -4,7 +4,6 @@ import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import android.telephony.TelephonyManager
 import java.net.URLEncoder
 import java.time.Instant
 import java.time.ZoneId
@@ -56,51 +55,14 @@ object Streaming {
         Provider(listOf("fanatiz"), emptyList(), listOf("fanatiz")),
     )
 
-    /**
-     * This phone's country code ("US", "BO", ...) from the mobile network (where the phone is),
-     * falling back to the language setting. Only decides which country's channels are listed first;
-     * Open buttons don't depend on it.
-     */
-    var myCountryCode: String = "US"
-        private set
-    val myCountry get() = countryName(myCountryCode)
+    /** Listings are always for the USA (FotMob's country code), wherever the phone is. */
+    const val COUNTRY = "US"
 
-    fun detectCountry(context: Context) {
-        val network = context.getSystemService(TelephonyManager::class.java)?.networkCountryIso.orEmpty()
-        myCountryCode = network.ifBlank { Locale.getDefault().country }.uppercase().ifBlank { "US" }
-    }
+    /** FotMob's US channels and streaming services for a game, e.g. TUDN, ViX, Paramount+. */
+    fun channels(match: Match): List<Channel> = match.tv[COUNTRY].orEmpty().map { Channel(it, COUNTRY) }
 
-    fun countryName(code: String) = when (code) {
-        "US" -> "USA"
-        "GB" -> "UK"
-        else -> Locale("", code).getDisplayCountry(Locale.ENGLISH).ifBlank { code }
-    }
-
-    /**
-     * Every known channel for a game: FotMob's listings per country. ESPN's (US only) fill in when
-     * FotMob has nothing for the US, since FotMob's list is the more complete and up to date one.
-     */
-    fun channels(match: Match): List<Channel> {
-        val fotmob = match.tv.flatMap { (country, names) -> names.map { Channel(it, country) } }
-        val espn = if (match.tv["US"].isNullOrEmpty()) match.broadcasts.map { Channel(it.name, "US") } else emptyList()
-        return (fotmob + espn).distinctBy { it.country to sameName(it.name) }
-    }
-
-    /** "Paramount+" and "Paramount Plus" are the same service. */
-    private fun sameName(name: String) =
-        name.lowercase().replace("plus", "+").filter { it.isLetterOrDigit() || it == '+' }
-
-    /** Channels grouped by country code, this phone's country first. */
-    fun byCountry(match: Match): List<Pair<String, List<Channel>>> =
-        channels(match).groupBy { it.country }.toList()
-            .sortedBy { (country, _) -> if (country == myCountryCode) 0 else 1 }
-
-    /** Short text for notifications and the game list, e.g. "Paramount+, ViX" or "Entel Gol (Bolivia)". */
-    fun summary(match: Match): String {
-        val (country, list) = byCountry(match).firstOrNull() ?: return ""
-        val text = list.joinToString(", ") { it.name }
-        return if (country == myCountryCode) text else "$text (${countryName(country)})"
-    }
+    /** Short text for notifications and the game list, e.g. "TUDN, ViX, Paramount+". */
+    fun summary(match: Match): String = channels(match).joinToString(", ") { it.name }
 
     /** Slow (reads every installed app's name): call off the main thread. */
     fun options(context: Context, channels: List<Channel>): List<WatchOption> {
@@ -133,21 +95,6 @@ object Streaming {
         val spanish = match.leagueSlug.startsWith("bol.") || match.leagueSlug.startsWith("conmebol")
         val q = if (spanish) "${match.home} vs ${match.away} dónde ver en vivo $date"
         else "${match.home} vs ${match.away} where to watch $date"
-        return "https://www.google.com/search?q=" + URLEncoder.encode(q, "UTF-8")
-    }
-
-    // Live Soccer TV team pages (ESPN team id -> page). Each lists the team's games with their channels.
-    private val liveSoccerTvTeams = mapOf(
-        "86" to "spain/real-madrid",
-        "6077" to "united-states/houston-dynamo",
-        "2681" to "bolivia/bolivar-la-paz",
-    )
-
-    /** A followed team's Live Soccer TV page, or a web search that finds this game's page there. */
-    fun liveSoccerTvUrl(match: Match, teams: List<Team>): String {
-        val path = teams.firstNotNullOfOrNull { t -> liveSoccerTvTeams[t.id]?.takeIf { t.id in match.teamIds } }
-        if (path != null) return "https://www.livesoccertv.com/teams/$path/"
-        val q = "livesoccertv ${match.home} vs ${match.away}"
         return "https://www.google.com/search?q=" + URLEncoder.encode(q, "UTF-8")
     }
 

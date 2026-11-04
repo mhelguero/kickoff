@@ -231,7 +231,7 @@ private fun Root(openMatch: String?, onOpenMatch: (String?) -> Unit, needsSetup:
     val match = openMatch?.let { state.matches[it] }
     if (match != null) {
         BackHandler { onOpenMatch(null) }
-        MatchScreen(match, state.teams, state.showScores, onBack = { onOpenMatch(null) })
+        MatchScreen(match, state.showScores, onBack = { onOpenMatch(null) })
     } else {
         HomeScreen(state, refreshing, ::refresh, onOpenMatch, needsSetup, onFixSetup)
     }
@@ -339,7 +339,7 @@ private fun HomeScreen(
                 }) { Text("Send a test notification") }
                 Text(
                     "Alerts: kickoff always; 2nd half and full time only until you open one of that game's alerts. " +
-                        "Channels come from FotMob (every country) and ESPN (US)." +
+                        "Channels: FotMob's listings for the USA." +
                         state.tvStatus.ifBlank { null }?.let { "\nFotMob check: $it" }.orEmpty(),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -444,32 +444,9 @@ private fun scoreLine(m: Match, showScores: Boolean) =
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun MatchScreen(m: Match, teams: List<Team>, showScores: Boolean, onBack: () -> Unit) {
+private fun MatchScreen(m: Match, showScores: Boolean, onBack: () -> Unit) {
     val context = LocalContext.current
-    val groups = Streaming.byCountry(m)
-    val mine = groups.firstOrNull { it.first == Streaming.myCountryCode }?.second.orEmpty()
-    val others = groups.filter { it.first != Streaming.myCountryCode }
-        .sortedBy { Streaming.countryName(it.first) }
-    // Other countries take ~250 requests (one per country), so they load only when asked for.
-    var showOthers by remember(m.id) { mutableStateOf(false) }
-    var loadingOthers by remember(m.id) { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
-    fun loadOthers() {
-        if (loadingOthers || m.fotmobId.isBlank()) return
-        loadingOthers = true
-        scope.launch {
-            val all = FotMob.allCountries(m.fotmobId)
-            // Replaces the other countries' listings; this phone's keeps what refresh found if its
-            // request failed here (refresh keeps that one current).
-            val my = Streaming.myCountryCode
-            Store.update { s ->
-                val cur = s.matches[m.id] ?: return@update s
-                val mine = all[my] ?: cur.tv[my]
-                s.copy(matches = s.matches + (m.id to cur.copy(tv = if (mine != null) all + (my to mine) else all)))
-            }
-            loadingOthers = false
-        }
-    }
+    val channels = Streaming.channels(m)
     Scaffold(
         topBar = {
             TopAppBar(
@@ -487,28 +464,10 @@ private fun MatchScreen(m: Match, teams: List<Team>, showScores: Boolean, onBack
             Text(listOf(m.statusLabel, m.localTime()).filter { it.isNotBlank() }.joinToString(" · "),
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
             HorizontalDivider()
-            if (mine.isEmpty()) Text("No channel listed in ${Streaming.myCountry} for this game yet.")
+            if (channels.isEmpty()) Text("No US channel listed for this game yet.")
             else {
-                Text("In ${Streaming.myCountry}", style = MaterialTheme.typography.titleSmall)
-                ChannelCards(mine)
-            }
-            // Only FotMob lists other countries; ESPN's US listing alone isn't worth a button.
-            if (m.fotmobId.isNotBlank() || others.isNotEmpty()) {
-                TextButton(onClick = { showOthers = !showOthers; if (showOthers) loadOthers() }) {
-                    Text(if (showOthers) "Hide other countries" else "Show other countries")
-                }
-            }
-            if (showOthers) {
-                if (loadingOthers) Text("Checking every country…", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                else if (others.isEmpty()) Text("No channels listed in other countries.")
-                others.forEach { (country, list) ->
-                    Text(Streaming.countryName(country), style = MaterialTheme.typography.titleSmall)
-                    ChannelCards(list)
-                }
-            }
-            // Opens in the browser: a second opinion when FotMob is missing a channel.
-            TextButton(onClick = { Streaming.openUrl(context, Streaming.liveSoccerTvUrl(m, teams)) }) {
-                Text("See channels in every country on Live Soccer TV")
+                Text("In the USA", style = MaterialTheme.typography.titleSmall)
+                ChannelCards(channels)
             }
             TextButton(onClick = { Streaming.openUrl(context, Streaming.findMoreUrl(m)) }) {
                 Icon(Icons.Default.Search, null, Modifier.size(18.dp))

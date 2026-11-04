@@ -90,9 +90,9 @@ object Tracker {
     }
 
     /**
-     * Every channel and streaming service showing each game in this phone's country, from FotMob.
-     * Re-checked while a game is within two days, since channels get added late. Other countries
-     * load when a game is opened. Failures keep what we had; the home screen shows how it went.
+     * Every channel and streaming service showing each game in the USA, from FotMob.
+     * Re-checked while a game is within two days, since channels get added late. Failures keep
+     * what we had; the home screen shows how it went.
      */
     private fun findChannels(now: Long) {
         var problem = ""
@@ -117,7 +117,7 @@ object Tracker {
             Store.update { it.copy(tvStatus = "$teamsFound. Error: $problem") }
             return
         }
-        val my = Streaming.myCountryCode
+        val my = Streaming.COUNTRY
         val found = mutableMapOf<String, Pair<String, List<String>>>()  // match id to (FotMob id, channels here)
         for (m in s0.matches.values) {
             if (m.state == "post" || m.dateMillis > now + 14 * 24 * HOUR) continue
@@ -129,7 +129,7 @@ object Tracker {
             runCatching { FotMob.channels(fid, my) }.onSuccess { found[m.id] = fid to it }.onFailure(failed("channels"))
         }
         val status = "$teamsFound, ${found.size} games checked, ${found.values.count { it.second.isNotEmpty() }} " +
-            "with channels in ${Streaming.myCountry}" + problem.ifBlank { null }?.let { ". Error: $it" }.orEmpty()
+            "with US channels" + problem.ifBlank { null }?.let { ". Error: $it" }.orEmpty()
         Store.update { s ->
             val matches = s.matches.mapValues { (id, m) ->
                 // An empty list is kept too: it records that this country was checked.

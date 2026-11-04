@@ -1,11 +1,5 @@
 package app.kickoff
 
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -17,12 +11,10 @@ import java.net.URL
 import java.net.URLEncoder
 import java.text.Normalizer
 import java.time.OffsetDateTime
-import java.util.Locale
 
 /**
- * FotMob's public data: which TV channels and streaming services show a game, per country.
- * ESPN only knows US English-language rights, so this is where e.g. ViX, Fubo or DAZN come from.
- * Unofficial: every call can fail, and callers fall back to ESPN's listings.
+ * FotMob's public data: which TV channels and streaming services show a game in a country.
+ * Unofficial: every call can fail; a game then keeps the listing it had.
  */
 object FotMob {
     private const val BASE = "https://www.fotmob.com/api/data"
@@ -59,14 +51,6 @@ object FotMob {
             .map { it.replace(COUNTRY_TAG, "").trim() }
             .filter { it.isNotEmpty() }
             .distinct()
-
-    /** Channels in every country, a few requests at a time; countries that fail or list nothing are left out. */
-    suspend fun allCountries(matchId: String): Map<String, List<String>> = coroutineScope {
-        val limit = Semaphore(8)
-        Locale.getISOCountries().map { c ->
-            async(Dispatchers.IO) { limit.withPermit { c to runCatching { channels(matchId, c) }.getOrDefault(emptyList()) } }
-        }.awaitAll().filter { it.second.isNotEmpty() }.toMap()
-    }
 
     private val COUNTRY_TAG = Regex("""\s*\([A-Z]{2,3}\)$""")
 
