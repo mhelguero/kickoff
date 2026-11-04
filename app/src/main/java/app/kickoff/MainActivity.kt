@@ -364,16 +364,16 @@ private fun GameCard(m: Match, teams: List<Team>, showScores: Boolean, onClick: 
         border = if (live) BorderStroke(3.dp, content)
         else BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
-        Column(Modifier.padding(16.dp)) {
+        Column(Modifier.padding(20.dp)) {
             Row {
-                Text(m.league, style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
-                Text(m.statusLabel.ifEmpty { m.localTime() }, style = MaterialTheme.typography.labelMedium,
+                Text(m.league, style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
+                Text(m.statusLabel.ifEmpty { m.localTime() }, style = MaterialTheme.typography.labelLarge,
                     fontWeight = if (live) FontWeight.Bold else null)
             }
-            Spacer(Modifier.height(4.dp))
-            Text(scoreLine(m, showScores), style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(4.dp))
-            Text("📺 " + Streaming.summary(m).ifEmpty { "Broadcaster not listed yet" }, style = MaterialTheme.typography.bodyMedium,
+            Spacer(Modifier.height(8.dp))
+            Text(scoreLine(m, showScores), style = MaterialTheme.typography.titleLarge)
+            Spacer(Modifier.height(8.dp))
+            Text("📺 " + Streaming.summary(m).ifEmpty { "Broadcaster not listed yet" }, style = MaterialTheme.typography.bodyLarge,
                 color = content.copy(alpha = 0.8f))
         }
     }
