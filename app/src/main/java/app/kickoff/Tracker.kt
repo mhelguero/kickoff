@@ -96,20 +96,25 @@ object Tracker {
      */
     private fun findChannels(now: Long) {
         var problem = ""
-        fun failed(e: Throwable) { problem = e.message ?: e.javaClass.simpleName; Log.w(TAG, "SofaScore", e) }
+        // Each step's error, named, so the status line shows where listings stop.
+        fun failed(step: String): (Throwable) -> Unit = { e ->
+            problem = "$step: ${e.message ?: e.javaClass.simpleName}".take(120)
+            Log.w(TAG, "SofaScore $step", e)
+        }
 
         for (team in Store.state.value.teams.filter { it.sofaId.isBlank() }) {
-            val id = runCatching { Sofa.findTeam(team.name) }.onFailure(::failed).getOrNull() ?: continue
+            val id = runCatching { Sofa.findTeam(team.name) }.onFailure(failed("team search")).getOrNull() ?: continue
             Store.update { s -> s.copy(teams = s.teams.map { if (it.id == team.id) it.copy(sofaId = id) else it }) }
         }
         val s0 = Store.state.value
         val events = mutableMapOf<String, List<Sofa.Event>>()   // ESPN team id to its SofaScore games
         for (team in s0.teams.filter { it.sofaId.isNotBlank() }) {
-            runCatching { Sofa.teamEvents(team.sofaId) }.onSuccess { events[team.id] = it }.onFailure(::failed)
+            runCatching { Sofa.teamEvents(team.sofaId) }.onSuccess { events[team.id] = it }.onFailure(failed("games"))
         }
+        val teamsFound = "${s0.teams.count { it.sofaId.isNotBlank() }}/${s0.teams.size} teams"
         // Refused outright (e.g. HTTP 403): don't send a request per game that will be refused too.
         if (events.isEmpty() && problem.isNotEmpty()) {
-            Store.update { it.copy(tvStatus = problem) }
+            Store.update { it.copy(tvStatus = "$teamsFound. Error: $problem") }
             return
         }
         val found = mutableMapOf<String, Pair<String, Map<String, List<Int>>>>()  // match id to (event, tvIds)
@@ -123,7 +128,7 @@ object Tracker {
                 .firstOrNull { abs(it.startMillis - m.dateMillis) <= 3 * HOUR }?.id ?: continue
             runCatching { Sofa.countryChannels(event) }
                 .onSuccess { (ids, n) -> found[m.id] = event to ids; names += n }
-                .onFailure(::failed)
+                .onFailure(failed("channels"))
         }
         // Names for this phone's country now (cards and alerts show them); other countries load
         // when a game is opened.
@@ -131,15 +136,21 @@ object Tracker {
         val myIds = (found.values.map { it.second } + s0.matches.values.map { it.tvIds })
             .flatMap { it[my].orEmpty() }.toSet()
         fun missing() = myIds.filter { it !in names && it !in s0.channelNames }
-        if (missing().isNotEmpty()) runCatching { names += Sofa.channelNames(my) }.onFailure(::failed)
-        for (id in missing().take(20)) runCatching { Sofa.channelName(id) }.onSuccess { n -> if (n != null) names[id] = n }
+        if (missing().isNotEmpty()) runCatching { names += Sofa.channelNames(my) }.onFailure(failed("channel names"))
+        for (id in missing().take(20)) {
+            runCatching { Sofa.channelName(id) }.onSuccess { n -> if (n != null) names[id] = n }.onFailure(failed("channel name"))
+        }
+        val withTv = found.values.count { it.second.isNotEmpty() }
+        val status = "$teamsFound, ${events.values.sumOf { it.size }} games, ${found.size} matched, " +
+            "$withTv with channels, ${myIds.size - missing().size}/${myIds.size} $my names" +
+            problem.ifBlank { null }?.let { ". Error: $it" }.orEmpty()
         Store.update { s ->
             val matches = s.matches.mapValues { (id, m) ->
                 found[id]?.let { (event, ids) -> m.copy(sofaEventId = event, tvIds = ids) } ?: m
             }
             // Keep names only for channels some stored game uses.
             val used = matches.values.flatMap { it.tvIds.values.flatten() }.toSet()
-            s.copy(matches = matches, channelNames = (s.channelNames + names).filterKeys { it in used }, tvStatus = problem)
+            s.copy(matches = matches, channelNames = (s.channelNames + names).filterKeys { it in used }, tvStatus = status)
         }
     }
 

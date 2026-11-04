@@ -340,7 +340,7 @@ private fun HomeScreen(
                 Text(
                     "Alerts: kickoff always; 2nd half and full time only until you open one of that game's alerts. " +
                         "Channels come from SofaScore (every country) and ESPN (US)." +
-                        state.tvStatus.ifBlank { null }?.let { " SofaScore listings unavailable ($it): showing ESPN's only." }.orEmpty(),
+                        state.tvStatus.ifBlank { null }?.let { "\nSofaScore check: $it" }.orEmpty(),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 8.dp),

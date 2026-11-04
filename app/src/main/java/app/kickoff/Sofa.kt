@@ -105,8 +105,10 @@ object Sofa {
         conn.readTimeout = 15_000
         conn.setRequestProperty("Accept", "application/json")
         try {
-            if (conn.responseCode !in 200..299) error("SofaScore HTTP ${conn.responseCode}")
-            return json.parseToJsonElement(conn.inputStream.bufferedReader().readText())
+            if (conn.responseCode !in 200..299) error("HTTP ${conn.responseCode}")
+            // SofaScore answers "nothing here" (e.g. no TV listings yet) with an empty 204 reply.
+            val body = if (conn.responseCode == 204) "" else conn.inputStream.bufferedReader().readText()
+            return if (body.isBlank()) JsonObject(emptyMap()) else json.parseToJsonElement(body)
         } finally {
             conn.disconnect()
         }
