@@ -3,7 +3,7 @@ package app.kickoff
 import kotlinx.serialization.Serializable
 
 @Serializable
-data class Team(val id: String, val name: String, val league: String = "")
+data class Team(val id: String, val name: String, val league: String = "", val color: String = "")
 
 @Serializable
 data class Broadcast(val name: String, val kind: String = "")
@@ -77,8 +77,17 @@ data class AppState(
     val lastRefresh: Long = 0,
 )
 
+// ESPN's Bolívar color (3c96c4) is darker than the club's light blue.
+const val BOLIVAR_LIGHT_BLUE = "7cc4ec"
+
+/** Stored when a team has no known color: not valid hex, so its cards use the default look. */
+const val NO_TEAM_COLOR = "none"
+
+/** Colors ESPN gets wrong (ESPN team id to hex). The Strongest is listed as plain black. */
+val TEAM_COLOR_OVERRIDES = mapOf("2681" to BOLIVAR_LIGHT_BLUE, "2687" to "ffd100")
+
 val DEFAULT_TEAMS = listOf(
-    Team("86", "Real Madrid", "LALIGA"),
-    Team("6077", "Houston Dynamo FC", "MLS"),
-    Team("2681", "Bolívar", "Bolivian Liga Profesional"),
+    Team("86", "Real Madrid", "LALIGA", "ffffff"),
+    Team("6077", "Houston Dynamo FC", "MLS", "ff6b00"),
+    Team("2681", "Bolívar", "Bolivian Liga Profesional", BOLIVAR_LIGHT_BLUE),
 )

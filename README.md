@@ -18,7 +18,8 @@ Allow your browser to install unknown apps when Android asks. To update, downloa
 it installs over the old version and keeps your teams.
 
 After the first install, open Kickoff and tap **Fix** on the setup banner so alerts arrive on time
-(notifications, alarms and unrestricted battery use).
+(notifications and alarms). Setting Kickoff's battery use to Unrestricted in Android's app settings
+is optional, but makes alerts more reliable, especially with power saving on.
 
 ## One-time GitHub setup
 

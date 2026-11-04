@@ -1,7 +1,6 @@
 package app.kickoff
 
 import android.Manifest
-import android.annotation.SuppressLint
 import android.app.AlarmManager
 import android.app.NotificationManager
 import android.content.Context
@@ -10,7 +9,6 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.os.PowerManager
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -19,6 +17,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.app.NotificationManagerCompat
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
@@ -76,6 +75,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -153,17 +153,13 @@ class MainActivity : ComponentActivity() {
     private fun hasNotificationPermission() = Build.VERSION.SDK_INT < 33 ||
         checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
 
-    private fun ignoringBattery() =
-        getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName)
-
     private fun exactAlarms() = Build.VERSION.SDK_INT < 31 ||
         getSystemService(AlarmManager::class.java).canScheduleExactAlarms()
 
     private fun checkSetup() {
-        needsSetup.value = !notificationsOn(this) || !ignoringBattery() || !exactAlarms()
+        needsSetup.value = !notificationsOn(this) || !exactAlarms()
     }
 
-    @SuppressLint("BatteryLife")
     private fun fixSetup() {
         val pkg = Uri.parse("package:$packageName")
         val appNotifications = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
@@ -177,12 +173,8 @@ class MainActivity : ComponentActivity() {
                     .putExtra(Settings.EXTRA_CHANNEL_ID, Notifier.CH_GAMES),
                 appNotifications,
             )
-            !exactAlarms() && Build.VERSION.SDK_INT >= 31 ->
-                listOf(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, pkg))
-            else -> listOf(
-                Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, pkg),
-                Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS),
-            )
+            Build.VERSION.SDK_INT >= 31 -> listOf(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, pkg))
+            else -> emptyList()
         } + Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, pkg)
         tries.firstOrNull { runCatching { startActivity(it) }.isSuccess }
     }
@@ -209,16 +201,16 @@ private fun Root(openMatch: String?, onOpenMatch: (String?) -> Unit, needsSetup:
         scope.launch {
             // Run again if teams changed mid-refresh (e.g. two teams added quickly).
             do {
-                val teams = Store.state.value.teams
+                val teams = Store.state.value.teams.map { it.id }
                 withContext(Dispatchers.IO) { Tracker.refresh(context) }
-            } while (Store.state.value.teams != teams)
+            } while (Store.state.value.teams.map { it.id } != teams)
             if (Tracker.gamesToWatch().isNotEmpty()) Tracker.startWatching(context)
             refreshing = false
         }
     }
 
     // Live scores reach the list through Store; WatchService does the polling while a game is on.
-    LaunchedEffect(state.teams) { refresh() }
+    LaunchedEffect(state.teams.map { it.id }) { refresh() }
 
     val match = openMatch?.let { state.matches[it] }
     if (match != null) {
@@ -270,7 +262,7 @@ private fun HomeScreen(
                 Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
                     Column(Modifier.padding(16.dp)) {
                         Text("Allow alerts to arrive on time", fontWeight = FontWeight.Bold)
-                        Text("Notifications, exact alarms and unrestricted battery use are needed so kickoff alerts aren't delayed.")
+                        Text("Notifications and exact alarms are needed so kickoff alerts aren't delayed.")
                         Spacer(Modifier.height(8.dp))
                         Button(onClick = onFixSetup) { Text("Fix") }
                     }
@@ -300,7 +292,7 @@ private fun HomeScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            items(games, key = { it.id }) { m -> GameCard(m, state.showScores) { onOpenMatch(m.id) } }
+            items(games, key = { it.id }) { m -> GameCard(m, state.teams, state.showScores) { onOpenMatch(m.id) } }
             item {
                 HorizontalDivider()
                 Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -355,12 +347,22 @@ private fun HomeScreen(
 }
 
 @Composable
-private fun GameCard(m: Match, showScores: Boolean, onClick: () -> Unit) {
+private fun GameCard(m: Match, teams: List<Team>, showScores: Boolean, onClick: () -> Unit) {
     val live = m.state == "in"
+    val background = teamColor(m, teams)
+    // Dark text on light team colors, white on dark ones (0.18 is where the two contrast equally).
+    val content = when {
+        background == null -> MaterialTheme.colorScheme.onSurface
+        background.luminance() > 0.18f -> Color(0xFF1A1A1A)
+        else -> Color.White
+    }
     Card(
         Modifier.fillMaxWidth().clickable(onClick = onClick),
-        colors = if (live) CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+        colors = if (background != null) CardDefaults.cardColors(containerColor = background, contentColor = content)
         else CardDefaults.cardColors(),
+        // The outline keeps white cards visible on a light screen; a thick one marks a live game.
+        border = if (live) BorderStroke(3.dp, content)
+        else BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
         Column(Modifier.padding(16.dp)) {
             Row {
@@ -372,9 +374,15 @@ private fun GameCard(m: Match, showScores: Boolean, onClick: () -> Unit) {
             Text(scoreLine(m, showScores), style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.height(4.dp))
             Text("📺 " + Streaming.summary(m).ifEmpty { "Broadcaster not listed yet" }, style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                color = content.copy(alpha = 0.8f))
         }
     }
+}
+
+/** Color of the first followed team in this game (the order they appear in the Teams list). */
+private fun teamColor(m: Match, teams: List<Team>): Color? {
+    val hex = teams.firstOrNull { it.id in m.teamIds }?.color.orEmpty()
+    return runCatching { Color(android.graphics.Color.parseColor("#$hex")) }.getOrNull()
 }
 
 private fun scoreLine(m: Match, showScores: Boolean) =

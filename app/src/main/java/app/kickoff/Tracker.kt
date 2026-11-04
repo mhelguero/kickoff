@@ -36,6 +36,7 @@ object Tracker {
     /** Pull fixtures for every followed team and merge them into the store. */
     fun refresh(context: Context) {
         val teams = Store.state.value.teams
+        fillTeamColors(teams)
         val fresh = mutableMapOf<String, Match>()
         val now = System.currentTimeMillis()
         for (team in teams) {
@@ -87,6 +88,16 @@ object Tracker {
         }
         updated.matches.values.forEach { handleTransition(context, it) }
         scheduleNextWatch(context)
+    }
+
+    /** Teams added from search (or saved before colors existed) get their card color here. */
+    private fun fillTeamColors(teams: List<Team>) {
+        for (team in teams.filter { it.color.isBlank() }) {
+            val color = TEAM_COLOR_OVERRIDES[team.id]
+                ?: runCatching { Espn.teamColor(team.id) }.getOrNull()
+                ?: continue
+            Store.update { s -> s.copy(teams = s.teams.map { if (it.id == team.id) it.copy(color = color) else it }) }
+        }
     }
 
     /**

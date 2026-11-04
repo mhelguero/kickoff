@@ -41,6 +41,17 @@ object Espn {
         return parseEvent(JsonObject(mapOf("id" to JsonPrimitive(eventId))), comp, header["league"]?.obj)
     }
 
+    /**
+     * The team's primary color as hex without "#", e.g. "ff6b00", or [NO_TEAM_COLOR]. ESPN fills in
+     * black with a red alternate for teams it has no real color for.
+     */
+    fun teamColor(teamId: String): String {
+        val team = get("$BASE/teams/$teamId").obj["team"].obj
+        val color = team.str("color").orEmpty()
+        val placeholder = color == "000000" && team.str("alternateColor").equals("C60000", ignoreCase = true)
+        return if (color.isBlank() || placeholder) NO_TEAM_COLOR else color
+    }
+
     fun searchTeams(query: String): List<Team> {
         val q = URLEncoder.encode(query, "UTF-8")
         val root = get("https://site.web.api.espn.com/apis/search/v2?query=$q&limit=50&type=team").obj
