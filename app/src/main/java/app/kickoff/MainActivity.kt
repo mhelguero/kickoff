@@ -261,6 +261,35 @@ private fun HomeScreen(
     var showSearch by remember { mutableStateOf(false) }
     var removing by remember { mutableStateOf<Team?>(null) }
     var testStep by rememberSaveable { mutableIntStateOf(0) }
+
+    // App updates from GitHub, checked each time the app comes to the screen (at most every 30 min).
+    var update by remember { mutableStateOf<Updater.Release?>(null) }
+    var updating by remember { mutableStateOf(false) }
+    var lastUpdateCheck by remember { mutableStateOf(0L) }
+    val scope = rememberCoroutineScope()
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(Unit) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            if (System.currentTimeMillis() - lastUpdateCheck < 30 * 60_000L) return@repeatOnLifecycle
+            lastUpdateCheck = System.currentTimeMillis()
+            update = withContext(Dispatchers.IO) { runCatching { Updater.checkForUpdate(context) }.getOrNull() }
+        }
+    }
+    fun installUpdate(release: Updater.Release) {
+        // Android asks once to let Kickoff install apps; the user comes back and taps Update again.
+        if (!Updater.canInstall(context)) {
+            Toast.makeText(context, "Allow Kickoff to install updates, then tap Update again.", Toast.LENGTH_LONG).show()
+            runCatching { Updater.openInstallPermission(context) }
+            return
+        }
+        updating = true
+        scope.launch {
+            val file = withContext(Dispatchers.IO) { runCatching { Updater.download(context, release) } }
+            updating = false
+            file.onSuccess { runCatching { Updater.install(context, it) } }
+                .onFailure { Toast.makeText(context, "Couldn't download the update. Try again.", Toast.LENGTH_LONG).show() }
+        }
+    }
     val now = System.currentTimeMillis()
     val today = LocalDate.now()
     val sorted = state.matches.values.sortedBy { it.dateMillis }
@@ -286,6 +315,18 @@ private fun HomeScreen(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            update?.let { release ->
+                item(key = "update") {
+                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
+                        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text("Kickoff ${release.versionName} is available", fontWeight = FontWeight.Bold,
+                                modifier = Modifier.weight(1f))
+                            if (updating) CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+                            else Button(onClick = { installUpdate(release) }) { Text("Update") }
+                        }
+                    }
+                }
+            }
             if (needsSetup) item {
                 Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
                     Column(Modifier.padding(16.dp)) {
