@@ -60,23 +60,24 @@ object Streaming {
 
     /** FotMob's US channels and streaming services for a game, e.g. TUDN, ViX, Paramount+. */
     fun channels(match: Match): List<Channel> =
-        match.tv[COUNTRY].orEmpty().map { espnGroup(it) }.distinct().map { Channel(it, COUNTRY) }
+        match.tv[COUNTRY].orEmpty().map { shortName(it) }.distinct().map { Channel(it, COUNTRY) }
 
     /**
-     * ESPN's many names, combined: ESPN Select (formerly ESPN+) shows as "ESPN+"; ESPN Deportes,
-     * ESPN Unlimited, ESPN2 and the rest as "ESPN". Other names are unchanged.
+     * Shorter, combined names: ESPN Select (formerly ESPN+) shows as "ESPN+"; ESPN Deportes,
+     * ESPN Unlimited, ESPN2 and the rest as "ESPN"; "Fubo Sports" as "Fubo". Others are unchanged.
      */
-    private fun espnGroup(name: String): String {
+    private fun shortName(name: String): String {
         val n = name.lowercase()
         return when {
+            "fubo" in n -> "Fubo"
             "espn" !in n -> name
             "select" in n || "+" in n || "plus" in n -> "ESPN+"
             else -> "ESPN"
         }
     }
 
-    /** Short text for notifications and the game list, e.g. "TUDN, ViX, Paramount+". */
-    fun summary(match: Match): String = channels(match).joinToString(", ") { it.name }
+    /** Short text for notifications and game cards, e.g. "TUDN, ViX, Paramount+". */
+    fun summary(match: Match, separator: String = ", "): String = channels(match).joinToString(separator) { it.name }
 
     /** Slow (reads every installed app's name): call off the main thread. */
     fun options(context: Context, channels: List<Channel>): List<WatchOption> {

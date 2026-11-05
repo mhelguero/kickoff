@@ -397,7 +397,7 @@ private fun GameCard(m: Match, teams: List<Team>, onClick: () -> Unit) {
             Spacer(Modifier.height(8.dp))
             Text(scoreLine(m), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(8.dp))
-            Text("📺 " + Streaming.summary(m).ifEmpty { "Broadcaster not listed yet" }, style = MaterialTheme.typography.bodyLarge,
+            Text("📺 " + Streaming.summary(m, " · ").ifEmpty { "Broadcaster not listed yet" }, style = MaterialTheme.typography.bodyLarge,
                 color = content.copy(alpha = 0.8f))
         }
     }
@@ -475,10 +475,7 @@ private fun MatchScreen(m: Match, onBack: () -> Unit) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
             HorizontalDivider()
             if (channels.isEmpty()) Text("No US channel listed for this game yet.")
-            else {
-                Text("In the USA", style = MaterialTheme.typography.titleSmall)
-                ChannelCards(channels)
-            }
+            else ChannelCards(channels)
             TextButton(onClick = { Streaming.openUrl(context, Streaming.findMoreUrl(m)) }) {
                 Icon(Icons.Default.Search, null, Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))
