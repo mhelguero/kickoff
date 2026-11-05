@@ -17,8 +17,18 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.time.OffsetDateTime
 
-/** A headline about a followed team ([teamId] is ESPN's id, as on [Team]). */
-data class NewsItem(val title: String, val source: String, val timeMillis: Long, val url: String, val teamId: String)
+/**
+ * A headline about a followed team ([teamId] is ESPN's id, as on [Team]). [writer] is the author
+ * when the source names one (ESPN does; FotMob gives only the outlet, [source]).
+ */
+data class NewsItem(
+    val title: String,
+    val source: String,
+    val timeMillis: Long,
+    val url: String,
+    val teamId: String,
+    val writer: String = "",
+)
 
 /**
  * The last week's headlines for each followed team, from FotMob (which gathers SI, BBC, talkSPORT,
@@ -89,7 +99,7 @@ object News {
                 val time = a.str("published")?.let { runCatching { OffsetDateTime.parse(it).toInstant().toEpochMilli() }.getOrNull() }
                     ?: return@mapNotNull null
                 val url = a["links"].obj["web"].obj.str("href") ?: return@mapNotNull null
-                if (time < since) null else NewsItem(title.trim(), "ESPN", time, url, team.id)
+                if (time < since) null else NewsItem(title.trim(), "ESPN", time, url, team.id, a.str("byline").orEmpty().trim())
             }
 
     private fun get(url: String): JsonElement {

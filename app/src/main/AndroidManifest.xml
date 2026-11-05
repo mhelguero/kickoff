@@ -25,6 +25,12 @@
         <package android:name="com.wbd.stream" />
         <package android:name="com.amazon.avod.thirdpartyclient" />
         <package android:name="com.google.android.youtube" />
+        <!-- Lets Kickoff see which app opens a news link (shown on news cards). -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="https" />
+        </intent>
         <!-- Lets Kickoff find streaming apps by their home-screen name too. -->
         <intent>
             <action android:name="android.intent.action.MAIN" />
