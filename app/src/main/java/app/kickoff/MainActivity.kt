@@ -39,6 +39,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -62,6 +63,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -269,6 +272,19 @@ private fun HomeScreen(
     var removing by remember { mutableStateOf<Team?>(null) }
     var testStep by rememberSaveable { mutableIntStateOf(0) }
 
+    // Games or News tab. News loads when its tab is shown (again after 15 minutes or a team change).
+    var tab by rememberSaveable { mutableIntStateOf(0) }
+    val news by News.items.collectAsStateWithLifecycle()
+    val newsLoading by News.loading.collectAsStateWithLifecycle()
+    val teamKey = state.teams.map { "${it.id}:${it.fotmobId}" }
+    var newsFor by remember { mutableStateOf<List<String>?>(null) }
+    LaunchedEffect(tab, teamKey) {
+        if (tab == 1 && (newsFor != teamKey || System.currentTimeMillis() - News.lastLoad > 15 * 60_000L)) {
+            newsFor = teamKey
+            News.load(state.teams)
+        }
+    }
+
     // App updates from GitHub, checked each time the app comes to the screen and on swipe-to-refresh.
     var update by remember { mutableStateOf<Updater.Release?>(null) }
     var updating by remember { mutableStateOf(false) }
@@ -319,7 +335,15 @@ private fun HomeScreen(
         },
     ) { pad ->
         // Swipe down to refresh.
-        PullToRefreshBox(isRefreshing = refreshing, onRefresh = { onRefresh(); scope.launch { checkUpdate() } }, modifier = Modifier.fillMaxSize().padding(pad)) {
+        PullToRefreshBox(
+            isRefreshing = refreshing || (tab == 1 && newsLoading),
+            onRefresh = {
+                onRefresh()
+                if (tab == 1) scope.launch { News.load(state.teams) }
+                scope.launch { checkUpdate() }
+            },
+            modifier = Modifier.fillMaxSize().padding(pad),
+        ) {
             LazyColumn(
                 Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(16.dp),
@@ -364,36 +388,53 @@ private fun HomeScreen(
                             leadingIcon = { Icon(Icons.Default.Add, null, Modifier.size(18.dp)) })
                     }
                 }
-                if (live.isNotEmpty()) {
-                    item(key = "live-header") { SectionHeader("Live") }
-                    items(live, key = { it.id }) { m -> GameCard(m, state.teams) { onOpenMatch(m.id) } }
+                item(key = "tabs") {
+                    TabRow(selectedTabIndex = tab) {
+                        Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("Games", fontWeight = FontWeight.Bold) })
+                        Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("News", fontWeight = FontWeight.Bold) })
+                    }
                 }
-                if (ended.isNotEmpty()) {
-                    item(key = "ended-header") { SectionHeader("Ended") }
-                    items(ended, key = { it.id }) { m -> GameCard(m, state.teams) { onOpenMatch(m.id) } }
-                }
-                item(key = "upcoming-header") { SectionHeader("Upcoming") }
-                if (upcoming.isEmpty()) item { Hint(if (refreshing) "Loading…" else "No upcoming games found.") }
-                upcoming.groupBy { it.zoned().toLocalDate() }.forEach { (day, dayGames) ->
-                    item(key = "day-$day") { DayDivider(dividerFmt.format(day)) }
-                    items(dayGames, key = { it.id }) { m -> GameCard(m, state.teams) { onOpenMatch(m.id) } }
-                }
-                item {
-                    OutlinedButton(onClick = {
-                        // Separate id, so it never replaces a real game's alert or marks that game read.
-                        val base = (live + upcoming).firstOrNull() ?: Match("", now, "Real Madrid", "Valencia", league = "LALIGA",
-                            tv = mapOf(Streaming.COUNTRY to listOf("ESPN+")))
-                        // Each tap shows the next alert of a game: kickoff, 2nd half, full time, then kickoff again.
-                        val phase = testPhases[testStep % testPhases.size]
-                        val score = when (phase) { Phase.SECOND_HALF -> "1" to "0"; Phase.ENDED -> "2" to "1"; else -> null }
-                        val sample = base.copy(id = "test", homeScore = score?.first, awayScore = score?.second)
-                        if (notificationsOn(context)) {
-                            Notifier.gameAlert(context, sample, phase)
-                            testStep++
-                        } else {
-                            Toast.makeText(context, "Notifications are off for Kickoff. Tap Fix above.", Toast.LENGTH_LONG).show()
+                if (tab == 1) {
+                    // A removed team's headlines go right away, before the next load.
+                    val shown = news.filter { n -> state.teams.any { it.id == n.teamId } }
+                    if (shown.isEmpty()) item { Hint(if (newsLoading) "Loading news…" else "No news from the last week.") }
+                    shown.groupBy { Instant.ofEpochMilli(it.timeMillis).atZone(ZoneId.systemDefault()).toLocalDate() }
+                        .forEach { (day, dayNews) ->
+                            item(key = "news-day-$day") { DayDivider(dividerFmt.format(day)) }
+                            itemsIndexed(dayNews, key = { i, _ -> "news-$day-$i" }) { _, n -> NewsCard(n, state.teams) }
                         }
-                    }, Modifier.padding(top = 8.dp)) { Text("Send a test notification") }
+                } else {
+                    if (live.isNotEmpty()) {
+                        item(key = "live-header") { SectionHeader("Live") }
+                        items(live, key = { it.id }) { m -> GameCard(m, state.teams) { onOpenMatch(m.id) } }
+                    }
+                    if (ended.isNotEmpty()) {
+                        item(key = "ended-header") { SectionHeader("Ended") }
+                        items(ended, key = { it.id }) { m -> GameCard(m, state.teams) { onOpenMatch(m.id) } }
+                    }
+                    item(key = "upcoming-header") { SectionHeader("Upcoming") }
+                    if (upcoming.isEmpty()) item { Hint(if (refreshing) "Loading…" else "No upcoming games found.") }
+                    upcoming.groupBy { it.zoned().toLocalDate() }.forEach { (day, dayGames) ->
+                        item(key = "day-$day") { DayDivider(dividerFmt.format(day)) }
+                        items(dayGames, key = { it.id }) { m -> GameCard(m, state.teams) { onOpenMatch(m.id) } }
+                    }
+                    item {
+                        OutlinedButton(onClick = {
+                            // Separate id, so it never replaces a real game's alert or marks that game read.
+                            val base = (live + upcoming).firstOrNull() ?: Match("", now, "Real Madrid", "Valencia", league = "LALIGA",
+                                tv = mapOf(Streaming.COUNTRY to listOf("ESPN+")))
+                            // Each tap shows the next alert of a game: kickoff, 2nd half, full time, then kickoff again.
+                            val phase = testPhases[testStep % testPhases.size]
+                            val score = when (phase) { Phase.SECOND_HALF -> "1" to "0"; Phase.ENDED -> "2" to "1"; else -> null }
+                            val sample = base.copy(id = "test", homeScore = score?.first, awayScore = score?.second)
+                            if (notificationsOn(context)) {
+                                Notifier.gameAlert(context, sample, phase)
+                                testStep++
+                            } else {
+                                Toast.makeText(context, "Notifications are off for Kickoff. Tap Fix above.", Toast.LENGTH_LONG).show()
+                            }
+                        }, Modifier.padding(top = 8.dp)) { Text("Send a test notification") }
+                    }
                 }
             }
         }
@@ -425,12 +466,7 @@ private fun HomeScreen(
 private fun GameCard(m: Match, teams: List<Team>, onClick: () -> Unit) {
     val live = m.state == "in"
     val background = teamColor(m, teams)
-    // Dark text on light team colors, white on dark ones (0.18 is where the two contrast equally).
-    val content = when {
-        background == null -> MaterialTheme.colorScheme.onSurface
-        background.luminance() > 0.18f -> Color(0xFF1A1A1A)
-        else -> Color.White
-    }
+    val content = contentOn(background)
     Card(
         Modifier.fillMaxWidth().clickable(onClick = onClick),
         colors = if (background != null) CardDefaults.cardColors(containerColor = background, contentColor = content)
@@ -493,11 +529,45 @@ private fun DayDivider(label: String) {
     }
 }
 
-/** Color of the first followed team in this game (the order they appear in the Teams list). */
-private fun teamColor(m: Match, teams: List<Team>): Color? {
-    val hex = teams.firstOrNull { it.id in m.teamIds }?.color.orEmpty()
-    return runCatching { Color(android.graphics.Color.parseColor("#$hex")) }.getOrNull()
+/** A headline, in its team's color; tapping opens the article. */
+@Composable
+private fun NewsCard(n: NewsItem, teams: List<Team>) {
+    val context = LocalContext.current
+    val background = colorOf(teams.firstOrNull { it.id == n.teamId })
+    val content = contentOn(background)
+    Card(
+        Modifier.fillMaxWidth().clickable { Streaming.openUrl(context, n.url) },
+        colors = if (background != null) CardDefaults.cardColors(containerColor = background, contentColor = content)
+        else CardDefaults.cardColors(),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Text(n.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                listOf(n.source, timeFmt.format(Instant.ofEpochMilli(n.timeMillis).atZone(ZoneId.systemDefault())))
+                    .filter { it.isNotBlank() }.joinToString(Streaming.DOT),
+                style = MaterialTheme.typography.labelMedium,
+                color = content.copy(alpha = 0.8f),
+            )
+        }
+    }
 }
+
+/** A team's card color, or null for the default look. */
+private fun colorOf(team: Team?): Color? =
+    runCatching { Color(android.graphics.Color.parseColor("#${team?.color.orEmpty()}")) }.getOrNull()
+
+/** Dark text on light team colors, white on dark ones (0.18 is where the two contrast equally). */
+@Composable
+private fun contentOn(background: Color?): Color = when {
+    background == null -> MaterialTheme.colorScheme.onSurface
+    background.luminance() > 0.18f -> Color(0xFF1A1A1A)
+    else -> Color.White
+}
+
+/** Color of the first followed team in this game (the order they appear in the Teams list). */
+private fun teamColor(m: Match, teams: List<Team>): Color? = colorOf(teams.firstOrNull { it.id in m.teamIds })
 
 /** Live and finished games show the score. */
 private fun scoreLine(m: Match) =
