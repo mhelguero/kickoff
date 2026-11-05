@@ -10,6 +10,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -266,18 +267,19 @@ private fun HomeScreen(
     var removing by remember { mutableStateOf<Team?>(null) }
     var testStep by rememberSaveable { mutableIntStateOf(0) }
 
-    // App updates from GitHub, checked each time the app comes to the screen (at most every 30 min).
+    // App updates from GitHub, checked each time the app comes to the screen and on swipe-to-refresh.
     var update by remember { mutableStateOf<Updater.Release?>(null) }
     var updating by remember { mutableStateOf(false) }
-    var lastUpdateCheck by remember { mutableStateOf(0L) }
     val scope = rememberCoroutineScope()
+    suspend fun checkUpdate() {
+        // A failed check keeps any banner already showing.
+        withContext(Dispatchers.IO) { runCatching { Updater.checkForUpdate(context) } }
+            .onSuccess { update = it }
+            .onFailure { Log.w("Kickoff", "update check failed", it) }
+    }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     LaunchedEffect(Unit) {
-        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
-            if (System.currentTimeMillis() - lastUpdateCheck < 30 * 60_000L) return@repeatOnLifecycle
-            lastUpdateCheck = System.currentTimeMillis()
-            update = withContext(Dispatchers.IO) { runCatching { Updater.checkForUpdate(context) }.getOrNull() }
-        }
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) { checkUpdate() }
     }
     fun installUpdate(release: Updater.Release) {
         // Android asks once to let Kickoff install apps; the user comes back and taps Update again.
@@ -309,7 +311,7 @@ private fun HomeScreen(
         },
     ) { pad ->
         // Swipe down to refresh.
-        PullToRefreshBox(isRefreshing = refreshing, onRefresh = onRefresh, modifier = Modifier.fillMaxSize().padding(pad)) {
+        PullToRefreshBox(isRefreshing = refreshing, onRefresh = { onRefresh(); scope.launch { checkUpdate() } }, modifier = Modifier.fillMaxSize().padding(pad)) {
             LazyColumn(
                 Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(16.dp),
