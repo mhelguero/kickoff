@@ -551,9 +551,9 @@ private fun ChannelCards(channels: List<Channel>, match: Match) {
             Row(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(o.name, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
                 // Only apps installed on this phone get a button; the rest are listed for info.
-                o.launch?.let { launch ->
+                if (o.launch != null) {
                     Spacer(Modifier.width(8.dp))
-                    Button(onClick = { Streaming.open(context, launch) }) { Text("Open ${o.name}") }
+                    Button(onClick = { Streaming.open(context, o) }) { Text("Open ${o.name}") }
                 }
             }
         }

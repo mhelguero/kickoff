@@ -1,10 +1,10 @@
 package app.kickoff
 
-import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.util.Log
 import java.net.URLEncoder
 import java.time.Instant
 import java.time.ZoneId
@@ -16,6 +16,8 @@ data class WatchOption(
     val name: String,
     val country: String,
     val launch: Intent?,
+    /** Tried before [launch]: the app straight on this game's page, when it has such a link. */
+    val gameLinks: List<Intent> = emptyList(),
 )
 
 object Streaming {
@@ -106,23 +108,32 @@ object Streaming {
             // Installed is all that matters: the phone's region setting is often not where the user is.
             val provider = providers.firstOrNull { it.matches(ch.name) }
             val app = provider?.let { installedApp(it) }
-            val launch = if (app != null && match != null && provider.keys.contains("espn")) espnGame(pm, app, match) ?: app else app
-            WatchOption(ch.name, ch.country, launch)
+            val links = if (app != null && match != null && provider.keys.contains("espn")) espnGame(pm, app, match) else emptyList()
+            WatchOption(ch.name, ch.country, app, links)
         }
     }
 
     /**
-     * The ESPN app straight on this game's page, if the app accepts one of these links; the games
-     * come from ESPN, so its game id is known. Neither link is documented by ESPN; null falls back
-     * to opening the app's home screen.
+     * Links that may open the ESPN app straight on this game's page; the games come from ESPN, so
+     * its game id is known. Neither link is documented by ESPN. Only links the app lets other apps
+     * open are kept (an ESPN screen that refuses them crashed Kickoff when opened).
      */
-    private fun espnGame(pm: PackageManager, app: Intent, match: Match): Intent? {
-        val pkg = app.`package` ?: app.component?.packageName ?: return null
+    private fun espnGame(pm: PackageManager, app: Intent, match: Match): List<Intent> {
+        val pkg = app.`package` ?: app.component?.packageName ?: return emptyList()
         return listOf(
             "sportscenter://x-callback-url/showGame?sportName=soccer&leagueAbbrev=${match.leagueSlug}&gameID=${match.id}",
             "https://www.espn.com/soccer/match/_/gameId/${match.id}",
         ).map { Intent(Intent.ACTION_VIEW, Uri.parse(it)).setPackage(pkg) }
-            .firstOrNull { pm.resolveActivity(it, 0) != null }
+            .filter { link ->
+                pm.queryIntentActivities(link, 0).any { it.activityInfo.exported && it.activityInfo.permission == null }
+            }
+    }
+
+    /** Opens the first of the game links that works, else the app's home screen. Never crashes Kickoff. */
+    fun open(context: Context, option: WatchOption) {
+        for (intent in option.gameLinks + listOfNotNull(option.launch)) {
+            if (tryOpen(context, intent)) return
+        }
     }
 
     /** Web search for this exact game, in Spanish for South American competitions. */
@@ -135,12 +146,15 @@ object Streaming {
         return "https://www.google.com/search?q=" + URLEncoder.encode(q, "UTF-8")
     }
 
-    fun open(context: Context, intent: Intent) {
-        try {
-            context.startActivity(Intent(intent).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-        } catch (_: ActivityNotFoundException) {
-        }
+    /** False if Android refused (no such screen, or one other apps may not open). */
+    private fun tryOpen(context: Context, intent: Intent): Boolean = try {
+        context.startActivity(Intent(intent).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        true
+    } catch (e: Exception) {
+        // ActivityNotFoundException, SecurityException (screen not open to other apps), ...
+        Log.w("Streaming", "couldn't open $intent", e)
+        false
     }
 
-    fun openUrl(context: Context, url: String) = open(context, Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+    fun openUrl(context: Context, url: String) { tryOpen(context, Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
 }
