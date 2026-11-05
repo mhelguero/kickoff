@@ -67,12 +67,14 @@ object Streaming {
 
     /**
      * Shorter, combined names: ESPN Select (formerly ESPN+) shows as "ESPN+"; ESPN Deportes,
-     * ESPN Unlimited, ESPN2 and the rest as "ESPN"; "Fubo Sports" as "Fubo". Others are unchanged.
+     * ESPN Unlimited, ESPN2 and the rest as "ESPN"; "Fubo Sports" as "Fubo"; "Paramount+" as
+     * "Paramount Plus". Others are unchanged.
      */
     private fun shortName(name: String): String {
         val n = name.lowercase()
         return when {
             "fubo" in n -> "Fubo"
+            "paramount" in n -> "Paramount Plus"
             "espn" !in n -> name
             "select" in n || "+" in n || "plus" in n -> "ESPN+"
             else -> "ESPN"
