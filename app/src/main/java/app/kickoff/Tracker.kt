@@ -118,28 +118,23 @@ object Tracker {
             return
         }
         val my = Streaming.COUNTRY
-        val found = mutableMapOf<String, Pair<String, FotMob.Listing>>()  // match id to (FotMob id, listing here)
+        val found = mutableMapOf<String, Pair<String, List<String>>>()  // match id to (FotMob id, channels here)
         for (m in s0.matches.values) {
             if (m.state == "post" || m.dateMillis > now + 14 * 24 * HOUR) continue
-            // Far-off games are re-checked only until a listing with logos is in; most have none.
-            if (my in m.tv && m.logos.isNotEmpty() && m.dateMillis > now + 2 * 24 * HOUR) continue
+            if (my in m.tv && m.dateMillis > now + 2 * 24 * HOUR) continue
             // Same team, kickoff within 3 hours: a team never plays twice that close together.
             val fid = m.fotmobId.ifBlank { null } ?: s0.teams.filter { it.id in m.teamIds }
                 .flatMap { fixtures[it.id].orEmpty() }
                 .firstOrNull { abs(it.startMillis - m.dateMillis) <= 3 * HOUR }?.id ?: continue
-            runCatching { FotMob.listing(fid, my) }.onSuccess { found[m.id] = fid to it }.onFailure(failed("channels"))
+            runCatching { FotMob.channels(fid, my) }.onSuccess { found[m.id] = fid to it }.onFailure(failed("channels"))
         }
         Log.i(TAG, "FotMob: $teamsFound, ${found.size} games checked, " +
-            "${found.values.count { it.second.channels.isNotEmpty() }} with US channels" +
+            "${found.values.count { it.second.isNotEmpty() }} with US channels" +
             problem.ifBlank { null }?.let { ". Error: $it" }.orEmpty())
         Store.update { s ->
             val matches = s.matches.mapValues { (id, m) ->
                 // An empty list is kept too: it records that this country was checked.
-                found[id]?.let { (fid, listing) ->
-                    // Logos keyed by the name the app shows, e.g. FotMob's "Paramount+" as "Paramount Plus".
-                    m.copy(fotmobId = fid, tv = m.tv + (my to listing.channels),
-                        logos = listing.logos.mapKeys { Streaming.shortName(it.key) })
-                } ?: m
+                found[id]?.let { (fid, list) -> m.copy(fotmobId = fid, tv = m.tv + (my to list)) } ?: m
             }
             s.copy(matches = matches)
         }
@@ -177,7 +172,7 @@ object Tracker {
         val keepOld = rank(old) > rank(fresh) && old.dateMillis == fresh.dateMillis
         // ESPN knows nothing of FotMob's listings; keep them.
         return (if (keepOld) old else fresh)
-            .copy(broadcasts = broadcasts, fotmobId = old.fotmobId, tv = old.tv, logos = old.logos)
+            .copy(broadcasts = broadcasts, fotmobId = old.fotmobId, tv = old.tv)
     }
 
     /** Games that need live polling right now. */
@@ -199,7 +194,7 @@ object Tracker {
                 val cur = st.matches[m.id] ?: return@update st
                 // Summary has no broadcasts for some games; keep what the schedule gave us.
                 val next = live.copy(broadcasts = live.broadcasts.ifEmpty { cur.broadcasts },
-                    fotmobId = cur.fotmobId, tv = cur.tv, logos = cur.logos)
+                    fotmobId = cur.fotmobId, tv = cur.tv)
                 merged = next
                 st.copy(matches = st.matches + (m.id to next))
             }

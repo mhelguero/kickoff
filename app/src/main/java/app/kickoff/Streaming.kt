@@ -15,7 +15,6 @@ data class WatchOption(
     val name: String,
     val country: String,
     val launch: Intent?,
-    val logo: String? = null,
 )
 
 object Streaming {
@@ -64,14 +63,14 @@ object Streaming {
 
     /** FotMob's US channels and streaming services for a game, e.g. TUDN, ViX, Paramount+. */
     fun channels(match: Match): List<Channel> =
-        match.tv[COUNTRY].orEmpty().map { shortName(it) }.distinct().map { Channel(it, COUNTRY, match.logos[it]) }
+        match.tv[COUNTRY].orEmpty().map { shortName(it) }.distinct().map { Channel(it, COUNTRY) }
 
     /**
      * Shorter, combined names: ESPN Select (formerly ESPN+) shows as "ESPN+"; ESPN Deportes,
      * ESPN Unlimited, ESPN2 and the rest as "ESPN"; "Fubo Sports" as "Fubo"; "Paramount+" as
      * "Paramount Plus". Others are unchanged.
      */
-    fun shortName(name: String): String {
+    private fun shortName(name: String): String {
         val n = name.lowercase()
         return when {
             "fubo" in n -> "Fubo"
@@ -105,7 +104,7 @@ object Streaming {
         return channels.map { ch ->
             // Installed is all that matters: the phone's region setting is often not where the user is.
             val provider = providers.firstOrNull { it.matches(ch.name) }
-            WatchOption(ch.name, ch.country, provider?.let { installedApp(it) }, ch.logo)
+            WatchOption(ch.name, ch.country, provider?.let { installedApp(it) })
         }
     }
 

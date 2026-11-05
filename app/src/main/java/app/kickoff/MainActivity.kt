@@ -37,7 +37,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -51,7 +50,6 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -83,8 +81,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -512,7 +508,8 @@ private fun scoreLine(m: Match) =
 @Composable
 private fun MatchScreen(m: Match, onBack: () -> Unit) {
     val context = LocalContext.current
-    val channels = Streaming.channels(m)
+    // ESPN and ESPN+ are one app, so one row here (cards still list both).
+    val channels = Streaming.channels(m).map { if (it.name == "ESPN+") it.copy(name = "ESPN") else it }.distinctBy { it.name }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -546,7 +543,7 @@ private fun ChannelCards(channels: List<Channel>) {
     val context = LocalContext.current
     // Names show right away; buttons appear once the (slow) installed-app check finishes off the main
     // thread. Re-checked each time the screen opens, so a newly installed app gets its button.
-    val options by produceState(channels.map { WatchOption(it.name, it.country, null, it.logo) }, channels) {
+    val options by produceState(channels.map { WatchOption(it.name, it.country, null) }, channels) {
         value = withContext(Dispatchers.IO) { Streaming.options(context, channels) }
     }
     options.forEach { o ->
@@ -556,32 +553,9 @@ private fun ChannelCards(channels: List<Channel>) {
                 // Only apps installed on this phone get a button; the rest are listed for info.
                 o.launch?.let { launch ->
                     Spacer(Modifier.width(8.dp))
-                    OpenButton(o, onClick = { Streaming.open(context, launch) })
+                    Button(onClick = { Streaming.open(context, launch) }) { Text("Open ${o.name}") }
                 }
             }
-        }
-    }
-}
-
-/**
- * "Open" plus the service's logo when FotMob has one, else "Open <name>". Logo buttons are white so
- * logos of any color stay readable.
- */
-@Composable
-private fun OpenButton(o: WatchOption, onClick: () -> Unit) {
-    val context = LocalContext.current
-    val logo by produceState<ImageBitmap?>(null, o.logo) {
-        value = o.logo?.let { url -> withContext(Dispatchers.IO) { Logos.load(context, url) } }
-    }
-    val image = logo
-    if (image == null) {
-        Button(onClick = onClick) { Text("Open ${o.name}") }
-    } else {
-        Button(onClick = onClick, colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color(0xFF1A1A1A))) {
-            Text("Open")
-            Spacer(Modifier.width(8.dp))
-            Image(image, contentDescription = o.name, modifier = Modifier.height(24.dp).widthIn(max = 96.dp),
-                contentScale = ContentScale.Fit)
         }
     }
 }

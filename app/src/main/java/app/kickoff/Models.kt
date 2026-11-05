@@ -34,7 +34,6 @@ data class Match(
     val timeValid: Boolean = true,      // false when ESPN has a date but no confirmed kickoff time
     val fotmobId: String = "",          // the same game on FotMob
     val tv: Map<String, List<String>> = emptyMap(), // FotMob channels by country code ("US", "ES", ...)
-    val logos: Map<String, String> = emptyMap(),    // channel name (as shown) to logo image URL, US only
 ) {
     val title get() = "$home vs $away"
 
@@ -74,7 +73,7 @@ data class AlertState(
 )
 
 /** A TV channel or streaming service and the country code it's shown in (e.g. "ViX", "US"). */
-data class Channel(val name: String, val country: String, val logo: String? = null)
+data class Channel(val name: String, val country: String)
 
 @Serializable
 data class AppState(
