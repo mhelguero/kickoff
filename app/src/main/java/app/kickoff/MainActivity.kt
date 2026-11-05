@@ -84,6 +84,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -541,16 +543,34 @@ private fun NewsCard(n: NewsItem, teams: List<Team>) {
         else CardDefaults.cardColors(),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
-        Column(Modifier.padding(16.dp)) {
-            Text(n.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(4.dp))
-            Text(
-                listOf(n.source, timeFmt.format(Instant.ofEpochMilli(n.timeMillis).atZone(ZoneId.systemDefault())))
-                    .filter { it.isNotBlank() }.joinToString(Streaming.DOT),
-                style = MaterialTheme.typography.labelMedium,
-                color = content.copy(alpha = 0.8f),
-            )
+        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            // Which team the story is about.
+            TeamCrest(n.teamId)
+            Column(Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(n.source, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold,
+                        modifier = Modifier.weight(1f))
+                    Text(timeFmt.format(Instant.ofEpochMilli(n.timeMillis).atZone(ZoneId.systemDefault())),
+                        style = MaterialTheme.typography.labelLarge, color = content.copy(alpha = 0.8f))
+                }
+                Spacer(Modifier.height(4.dp))
+                Text(n.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            }
         }
+    }
+}
+
+/** A team's crest from ESPN (whose team ids the app uses), with room after it; nothing if it can't load. */
+@Composable
+private fun TeamCrest(teamId: String) {
+    val context = LocalContext.current
+    val url = "https://a.espncdn.com/i/teamlogos/soccer/500/$teamId.png"
+    val crest by produceState<ImageBitmap?>(null, url) {
+        value = withContext(Dispatchers.IO) { Logos.load(context, url) }
+    }
+    crest?.let {
+        Image(it, contentDescription = null, modifier = Modifier.size(40.dp), contentScale = ContentScale.Fit)
+        Spacer(Modifier.width(12.dp))
     }
 }
 
