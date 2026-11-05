@@ -69,7 +69,7 @@ object Phase {
 data class AlertState(
     val phase: Int = Phase.NONE,   // highest phase already handled
     val notified: Boolean = false, // at least one notification was posted
-    val read: Boolean = false,     // the user opened one of this game's notifications
+    val muted: Boolean = false,    // the user turned this game's alerts off (its card's bell)
 )
 
 /** A TV channel or streaming service and the country code it's shown in (e.g. "ViX", "US"). */

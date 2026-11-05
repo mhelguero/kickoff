@@ -204,8 +204,8 @@ object Tracker {
     }
 
     /**
-     * Kickoff always notifies (it's the first alert of a game). Second half and full time only
-     * notify while the user hasn't opened any notification for that game.
+     * Kickoff, second half and full time each notify once, unless the user turned that game's
+     * alerts off with the bell on its card.
      */
     private fun handleTransition(context: Context, match: Match) {
         val phase = match.phase
@@ -214,13 +214,14 @@ object Tracker {
         val stale = now > match.dateMillis + WATCH_MAX_MS
         // Postponed/canceled: no alert, and no phase recorded, so a rescheduled game still alerts.
         if (match.state == "post" && !match.completed) return
-        // Decide inside the store lock, so a notification tap (markRead) or a second poller running
-        // at the same time can't be overwritten or cause a duplicate alert.
+        // Decide inside the store lock, so a bell tap (setMuted) or a second poller running at the
+        // same time can't be overwritten or cause a duplicate alert. A muted game's phases are still
+        // recorded, so turning alerts back on doesn't send old ones.
         var shouldNotify = false
         Store.update { st ->
             val alert = st.alerts[match.id] ?: AlertState()
             if (phase <= alert.phase) return@update st
-            shouldNotify = !stale && !alert.read
+            shouldNotify = !stale && !alert.muted
             st.copy(alerts = st.alerts + (match.id to alert.copy(phase = phase, notified = alert.notified || shouldNotify)))
         }
         if (shouldNotify) Notifier.gameAlert(context, match, phase)

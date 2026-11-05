@@ -37,10 +37,8 @@ object Store {
         return next
     }
 
-    /** Called when the user opens a game; only counts once a notification for it has been sent. */
-    fun markRead(matchId: String) = update { s ->
-        val a = s.alerts[matchId]
-        if (a == null || !a.notified || a.read) s
-        else s.copy(alerts = s.alerts + (matchId to a.copy(read = true)))
+    /** Turns a game's alerts on or off (its card's bell). */
+    fun setMuted(matchId: String, muted: Boolean) = update { s ->
+        s.copy(alerts = s.alerts + (matchId to (s.alerts[matchId] ?: AlertState()).copy(muted = muted)))
     }
 }

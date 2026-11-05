@@ -47,6 +47,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
@@ -161,7 +162,6 @@ class MainActivity : ComponentActivity() {
 
     private fun handleIntent(intent: Intent?) {
         val id = intent?.getStringExtra(Notifier.EXTRA_MATCH_ID) ?: return
-        Store.markRead(id)
         openMatch.value = id
         intent.removeExtra(Notifier.EXTRA_MATCH_ID)
     }
@@ -408,7 +408,7 @@ private fun HomeScreen(
                 } else {
                     if (live.isNotEmpty()) {
                         item(key = "live-header") { SectionHeader("Live") }
-                        items(live, key = { it.id }) { m -> GameCard(m, state.teams) { onOpenMatch(m.id) } }
+                        items(live, key = { it.id }) { m -> GameCard(m, state.teams, state.alerts[m.id]?.muted == true) { onOpenMatch(m.id) } }
                     }
                     if (ended.isNotEmpty()) {
                         item(key = "ended-header") { SectionHeader("Ended") }
@@ -418,7 +418,7 @@ private fun HomeScreen(
                     if (upcoming.isEmpty()) item { Hint(if (refreshing) "Loading…" else "No upcoming games found.") }
                     upcoming.groupBy { it.zoned().toLocalDate() }.forEach { (day, dayGames) ->
                         item(key = "day-$day") { DayDivider(dividerFmt.format(day)) }
-                        items(dayGames, key = { it.id }) { m -> GameCard(m, state.teams) { onOpenMatch(m.id) } }
+                        items(dayGames, key = { it.id }) { m -> GameCard(m, state.teams, state.alerts[m.id]?.muted == true) { onOpenMatch(m.id) } }
                     }
                     item {
                         OutlinedButton(onClick = {
@@ -465,7 +465,7 @@ private fun HomeScreen(
 }
 
 @Composable
-private fun GameCard(m: Match, teams: List<Team>, onClick: () -> Unit) {
+private fun GameCard(m: Match, teams: List<Team>, muted: Boolean? = null, onClick: () -> Unit) {
     val live = m.state == "in"
     val background = teamColor(m, teams)
     val content = contentOn(background)
@@ -483,6 +483,18 @@ private fun GameCard(m: Match, teams: List<Team>, onClick: () -> Unit) {
                 // Just the minute ("63'") or "HT": the Live section already says it's live.
                 if (live) LiveBadge(m.statusLabel.removePrefix("LIVE ").trim())
                 else Text(m.statusLabel.ifEmpty { m.kickoffTime() }, style = MaterialTheme.typography.labelLarge)
+                // This game's alerts on or off; finished games (muted = null) have no more alerts.
+                muted?.let { off ->
+                    val context = LocalContext.current
+                    IconButton(onClick = {
+                        Store.setMuted(m.id, !off)
+                        Toast.makeText(context, if (off) "Alerts on for ${m.title}" else "Alerts off for ${m.title}",
+                            Toast.LENGTH_SHORT).show()
+                    }, modifier = Modifier.size(36.dp)) {
+                        if (off) Icon(painterResource(R.drawable.ic_bell_off), "Turn alerts on", tint = content.copy(alpha = 0.7f))
+                        else Icon(Icons.Default.Notifications, "Turn alerts off", tint = content)
+                    }
+                }
             }
             Spacer(Modifier.height(8.dp))
             Text(scoreLine(m), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
@@ -493,7 +505,7 @@ private fun GameCard(m: Match, teams: List<Team>, onClick: () -> Unit) {
     }
 }
 
-/** White text on a red rounded rectangle, e.g. "LIVE 63'" or "HT". */
+/** White text on a red rounded rectangle, e.g. "63'" or "HT". */
 @Composable
 private fun LiveBadge(label: String) {
     Text(
