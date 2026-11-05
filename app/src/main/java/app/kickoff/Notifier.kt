@@ -29,13 +29,14 @@ object Notifier {
         val score = if (match.homeScore != null) " (${match.homeScore}–${match.awayScore})" else ""
         val title = when (phase) {
             Phase.FIRST_HALF -> "${match.title} has started!"
-            Phase.SECOND_HALF -> "${match.title}$score: 2nd half has started!"
+            Phase.SECOND_HALF -> "${match.title}: 2nd half has started!$score"
             else -> "Ended: ${match.title}$score"
         }
-        // Where to watch only matters while the game is on.
+        // Where to watch first, then the competition on its own line. Where to watch only matters
+        // while the game is on.
         val watch = if (phase == Phase.ENDED) ""
-        else Streaming.summary(match).let { if (it.isEmpty()) "Tap to see where to watch" else "On $it" }
-        val text = listOf(match.league, watch).filter { it.isNotBlank() }.joinToString(" · ")
+        else Streaming.summary(match, Streaming.DOT).ifEmpty { "Tap to see where to watch" }
+        val text = listOf(watch, match.league).filter { it.isNotBlank() }.joinToString("\n")
         post(context, match.id.hashCode(), title, text, openMatchIntent(context, match.id))
     }
 

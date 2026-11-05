@@ -246,7 +246,7 @@ private fun Root(openMatch: String?, onOpenMatch: (String?) -> Unit, needsSetup:
     }
 }
 
-private val dayFmt = DateTimeFormatter.ofPattern("EEE, MMM d · h:mm a")
+private val dayFmt = DateTimeFormatter.ofPattern("EEE, MMM d • h:mm a")
 private val timeFmt = DateTimeFormatter.ofPattern("h:mm a")
 private val dividerFmt = DateTimeFormatter.ofPattern("EEE, MMM d")
 private fun Match.zoned() = Instant.ofEpochMilli(dateMillis).atZone(ZoneId.systemDefault())
@@ -449,7 +449,7 @@ private fun GameCard(m: Match, teams: List<Team>, onClick: () -> Unit) {
             Spacer(Modifier.height(8.dp))
             Text(scoreLine(m), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(8.dp))
-            Text("📺 " + Streaming.summary(m, " · ").ifEmpty { "Broadcaster not listed yet" }, style = MaterialTheme.typography.bodyLarge,
+            Text("📺 " + Streaming.summary(m, Streaming.DOT).ifEmpty { "Broadcaster not listed yet" }, style = MaterialTheme.typography.bodyLarge,
                 color = content.copy(alpha = 0.8f))
         }
     }
@@ -523,7 +523,7 @@ private fun MatchScreen(m: Match, onBack: () -> Unit) {
         ) {
             Text(m.league, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
             Text(scoreLine(m), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-            Text(listOf(m.statusLabel, m.localTime()).filter { it.isNotBlank() }.joinToString(" · "),
+            Text(listOf(m.statusLabel, m.localTime()).filter { it.isNotBlank() }.joinToString(Streaming.DOT),
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
             HorizontalDivider()
             if (channels.isEmpty()) Text("No US channel listed for this game yet.")
@@ -597,7 +597,7 @@ private fun TeamSearchDialog(onDismiss: () -> Unit) {
                     }.padding(vertical = 10.dp)) {
                         Text(t.name, style = MaterialTheme.typography.bodyLarge)
                         Text(
-                            listOf(t.league, if (already) "Following" else "").filter { it.isNotBlank() }.joinToString(" · "),
+                            listOf(t.league, if (already) "Following" else "").filter { it.isNotBlank() }.joinToString(Streaming.DOT),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )

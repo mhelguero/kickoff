@@ -58,6 +58,9 @@ object Streaming {
     /** Listings are always for the USA (FotMob's country code), wherever the phone is. */
     const val COUNTRY = "US"
 
+    /** Separator between channel names on cards and in alerts: a bullet, bigger than "·". */
+    const val DOT = " • "
+
     /** FotMob's US channels and streaming services for a game, e.g. TUDN, ViX, Paramount+. */
     fun channels(match: Match): List<Channel> =
         match.tv[COUNTRY].orEmpty().map { shortName(it) }.distinct().map { Channel(it, COUNTRY) }
