@@ -44,7 +44,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
@@ -61,6 +60,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -210,7 +210,11 @@ private fun Root(openMatch: String?, onOpenMatch: (String?) -> Unit, needsSetup:
             // Run again if teams changed mid-refresh (e.g. two teams added quickly).
             do {
                 val teams = Store.state.value.teams.map { it.id }
-                withContext(Dispatchers.IO) { Tracker.refresh(context) }
+                withContext(Dispatchers.IO) {
+                    Tracker.refresh(context)
+                    // Live scores right away too, not on the next 30-second poll.
+                    if (Tracker.gamesToWatch().isNotEmpty()) runCatching { Tracker.pollOnce(context) }
+                }
             } while (Store.state.value.teams.map { it.id } != teams)
             refreshing = false
         }
@@ -301,89 +305,86 @@ private fun HomeScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("Kickoff") },
-                actions = {
-                    if (refreshing) CircularProgressIndicator(Modifier.size(24.dp).padding(end = 4.dp), strokeWidth = 2.dp)
-                    else IconButton(onClick = onRefresh) { Icon(Icons.Default.Refresh, "Refresh") }
-                },
-            )
+            TopAppBar(title = { Text("Kickoff", fontWeight = FontWeight.Bold) })
         },
     ) { pad ->
-        LazyColumn(
-            Modifier.fillMaxSize().padding(pad),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            update?.let { release ->
-                item(key = "update") {
-                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
-                        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text("Kickoff ${release.versionName} is available", fontWeight = FontWeight.Bold,
-                                modifier = Modifier.weight(1f))
-                            if (updating) CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
-                            else Button(onClick = { installUpdate(release) }) { Text("Update") }
+        // Swipe down to refresh.
+        PullToRefreshBox(isRefreshing = refreshing, onRefresh = onRefresh, modifier = Modifier.fillMaxSize().padding(pad)) {
+            LazyColumn(
+                Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                update?.let { release ->
+                    item(key = "update") {
+                        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
+                            Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text("Kickoff ${release.versionName} is available", fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.weight(1f))
+                                if (updating) CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+                                else Button(onClick = { installUpdate(release) }) { Text("Update") }
+                            }
                         }
                     }
                 }
-            }
-            if (needsSetup) item {
-                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
-                    Column(Modifier.padding(16.dp)) {
-                        Text("Allow alerts to arrive on time", fontWeight = FontWeight.Bold)
-                        Text("Notifications and exact alarms are needed so kickoff alerts aren't delayed.")
-                        Spacer(Modifier.height(8.dp))
-                        Button(onClick = onFixSetup) { Text("Fix") }
+                if (needsSetup) item {
+                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
+                        Column(Modifier.padding(16.dp)) {
+                            Text("Allow alerts to arrive on time", fontWeight = FontWeight.Bold)
+                            Text("Notifications and exact alarms are needed so kickoff alerts aren't delayed.")
+                            Spacer(Modifier.height(8.dp))
+                            Button(onClick = onFixSetup) { Text("Fix") }
+                        }
                     }
                 }
-            }
-            item {
-                Text("Teams", style = MaterialTheme.typography.titleMedium)
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    state.teams.forEach { team ->
-                        InputChip(
-                            selected = false,
-                            onClick = {},
-                            label = { Text(team.name) },
-                            trailingIcon = {
-                                Icon(Icons.Default.Close, "Remove", Modifier.size(18.dp).clickable { removing = team })
-                            },
-                        )
+                item {
+                    Text("Teams", style = MaterialTheme.typography.titleMedium)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        state.teams.forEach { team ->
+                            InputChip(
+                                selected = false,
+                                onClick = {},
+                                label = { Text(team.name) },
+                                trailingIcon = {
+                                    Icon(Icons.Default.Close, "Remove", Modifier.size(18.dp).clickable { removing = team })
+                                },
+                            )
+                        }
+                        AssistChip(onClick = { showSearch = true }, label = { Text("Add team") },
+                            leadingIcon = { Icon(Icons.Default.Add, null, Modifier.size(18.dp)) })
                     }
-                    AssistChip(onClick = { showSearch = true }, label = { Text("Add team") },
-                        leadingIcon = { Icon(Icons.Default.Add, null, Modifier.size(18.dp)) })
                 }
-            }
-            if (live.isNotEmpty()) {
-                item(key = "live-header") { SectionHeader("Live") }
-                items(live, key = { it.id }) { m -> GameCard(m, state.teams) { onOpenMatch(m.id) } }
-            }
-            if (ended.isNotEmpty()) {
-                item(key = "ended-header") { SectionHeader("Ended") }
-                items(ended, key = { it.id }) { m -> GameCard(m, state.teams) { onOpenMatch(m.id) } }
-            }
-            item(key = "upcoming-header") { SectionHeader("Upcoming") }
-            if (upcoming.isEmpty()) item { Hint(if (refreshing) "Loading…" else "No upcoming games found.") }
-            upcoming.groupBy { it.zoned().toLocalDate() }.forEach { (day, dayGames) ->
-                item(key = "day-$day") { DayDivider(dividerFmt.format(day)) }
-                items(dayGames, key = { it.id }) { m -> GameCard(m, state.teams) { onOpenMatch(m.id) } }
-            }
-            item {
-                OutlinedButton(onClick = {
-                    // Separate id, so it never replaces a real game's alert or marks that game read.
-                    val base = (live + upcoming).firstOrNull() ?: Match("", now, "Real Madrid", "Valencia", league = "LALIGA",
-                        tv = mapOf(Streaming.COUNTRY to listOf("ESPN+")))
-                    // Each tap shows the next alert of a game: kickoff, 2nd half, full time, then kickoff again.
-                    val phase = testPhases[testStep % testPhases.size]
-                    val score = when (phase) { Phase.SECOND_HALF -> "1" to "0"; Phase.ENDED -> "2" to "1"; else -> null }
-                    val sample = base.copy(id = "test", homeScore = score?.first, awayScore = score?.second)
-                    if (notificationsOn(context)) {
-                        Notifier.gameAlert(context, sample, phase)
-                        testStep++
-                    } else {
-                        Toast.makeText(context, "Notifications are off for Kickoff. Tap Fix above.", Toast.LENGTH_LONG).show()
-                    }
-                }, Modifier.padding(top = 8.dp)) { Text("Send a test notification") }
+                if (live.isNotEmpty()) {
+                    item(key = "live-header") { SectionHeader("Live") }
+                    items(live, key = { it.id }) { m -> GameCard(m, state.teams) { onOpenMatch(m.id) } }
+                }
+                if (ended.isNotEmpty()) {
+                    item(key = "ended-header") { SectionHeader("Ended") }
+                    items(ended, key = { it.id }) { m -> GameCard(m, state.teams) { onOpenMatch(m.id) } }
+                }
+                item(key = "upcoming-header") { SectionHeader("Upcoming") }
+                if (upcoming.isEmpty()) item { Hint(if (refreshing) "Loading…" else "No upcoming games found.") }
+                upcoming.groupBy { it.zoned().toLocalDate() }.forEach { (day, dayGames) ->
+                    item(key = "day-$day") { DayDivider(dividerFmt.format(day)) }
+                    items(dayGames, key = { it.id }) { m -> GameCard(m, state.teams) { onOpenMatch(m.id) } }
+                }
+                item {
+                    OutlinedButton(onClick = {
+                        // Separate id, so it never replaces a real game's alert or marks that game read.
+                        val base = (live + upcoming).firstOrNull() ?: Match("", now, "Real Madrid", "Valencia", league = "LALIGA",
+                            tv = mapOf(Streaming.COUNTRY to listOf("ESPN+")))
+                        // Each tap shows the next alert of a game: kickoff, 2nd half, full time, then kickoff again.
+                        val phase = testPhases[testStep % testPhases.size]
+                        val score = when (phase) { Phase.SECOND_HALF -> "1" to "0"; Phase.ENDED -> "2" to "1"; else -> null }
+                        val sample = base.copy(id = "test", homeScore = score?.first, awayScore = score?.second)
+                        if (notificationsOn(context)) {
+                            Notifier.gameAlert(context, sample, phase)
+                            testStep++
+                        } else {
+                            Toast.makeText(context, "Notifications are off for Kickoff. Tap Fix above.", Toast.LENGTH_LONG).show()
+                        }
+                    }, Modifier.padding(top = 8.dp)) { Text("Send a test notification") }
+                }
             }
         }
     }
