@@ -42,15 +42,28 @@ object FotMob {
         }
 
     /**
-     * Channels showing a game in one country (ISO code like "US"), e.g. ["TUDN", "ViX", "Paramount+"].
-     * FotMob gives one " / "-separated name and tags some with the country, e.g. "Paramount+ (US)".
+     * What shows a game in one country: [channels] like ["TUDN", "ViX", "Paramount+"], and [logos],
+     * service name to logo image URL, for the few services FotMob has a partner link for
+     * (e.g. "Fubo", "ESPN", "Paramount+"). Most services have no logo.
      */
-    fun channels(matchId: String, country: String): List<String> =
-        get("$BASE/tvlisting?matchId=$matchId&countryCode=$country").obj.str("name").orEmpty()
-            .split(" / ")
+    data class Listing(val channels: List<String>, val logos: Map<String, String>)
+
+    fun listing(matchId: String, country: String): Listing {
+        val root = get("$BASE/tvlisting?matchId=$matchId&countryCode=$country").obj
+        // One " / "-separated name; some are tagged with the country, e.g. "Paramount+ (US)".
+        val channels = root.str("name").orEmpty().split(" / ")
             .map { it.replace(COUNTRY_TAG, "").trim() }
             .filter { it.isNotEmpty() }
             .distinct()
+        // Partner links, each in English and Spanish: {title: "Live on Fubo", imageUrl: ...}.
+        val partners = root["affiliates"].arr.map { it.obj }
+        val logos = (partners.filter { it.str("langCode") == "en" }.ifEmpty { partners }).mapNotNull { p ->
+            val name = p.str("title")?.substringAfterLast(" on ")?.trim()
+            val image = p.str("imageUrl")
+            if (name.isNullOrEmpty() || image.isNullOrEmpty()) null else name to image
+        }.toMap()
+        return Listing(channels, logos)
+    }
 
     private val COUNTRY_TAG = Regex("""\s*\([A-Z]{2,3}\)$""")
 
