@@ -473,15 +473,15 @@ private fun GameCard(m: Match, teams: List<Team>, onClick: () -> Unit) {
         Modifier.fillMaxWidth().clickable(onClick = onClick),
         colors = if (background != null) CardDefaults.cardColors(containerColor = background, contentColor = content)
         else CardDefaults.cardColors(),
-        // The outline keeps white cards visible on a light screen; a thick one marks a live game.
-        border = if (live) BorderStroke(3.dp, content)
-        else BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        // The outline keeps white cards visible on a light screen.
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
         Column(Modifier.padding(20.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(m.league, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold,
                     modifier = Modifier.weight(1f))
-                if (live) LiveBadge(m.statusLabel)
+                // Just the minute ("63'") or "HT": the Live section already says it's live.
+                if (live) LiveBadge(m.statusLabel.removePrefix("LIVE ").trim())
                 else Text(m.statusLabel.ifEmpty { m.kickoffTime() }, style = MaterialTheme.typography.labelLarge)
             }
             Spacer(Modifier.height(8.dp))
