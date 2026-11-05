@@ -3,6 +3,7 @@ package app.kickoff
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import java.net.URLEncoder
 import java.time.Instant
@@ -85,7 +86,7 @@ object Streaming {
     fun summary(match: Match, separator: String = ", "): String = channels(match).joinToString(separator) { it.name }
 
     /** Slow (reads every installed app's name): call off the main thread. */
-    fun options(context: Context, channels: List<Channel>): List<WatchOption> {
+    fun options(context: Context, channels: List<Channel>, match: Match? = null): List<WatchOption> {
         val pm = context.packageManager
         // Home-screen names of installed apps, loaded at most once per call and only if needed.
         val launcherApps by lazy {
@@ -104,8 +105,24 @@ object Streaming {
         return channels.map { ch ->
             // Installed is all that matters: the phone's region setting is often not where the user is.
             val provider = providers.firstOrNull { it.matches(ch.name) }
-            WatchOption(ch.name, ch.country, provider?.let { installedApp(it) })
+            val app = provider?.let { installedApp(it) }
+            val launch = if (app != null && match != null && provider.keys.contains("espn")) espnGame(pm, app, match) ?: app else app
+            WatchOption(ch.name, ch.country, launch)
         }
+    }
+
+    /**
+     * The ESPN app straight on this game's page, if the app accepts one of these links; the games
+     * come from ESPN, so its game id is known. Neither link is documented by ESPN; null falls back
+     * to opening the app's home screen.
+     */
+    private fun espnGame(pm: PackageManager, app: Intent, match: Match): Intent? {
+        val pkg = app.`package` ?: app.component?.packageName ?: return null
+        return listOf(
+            "sportscenter://x-callback-url/showGame?sportName=soccer&leagueAbbrev=${match.leagueSlug}&gameID=${match.id}",
+            "https://www.espn.com/soccer/match/_/gameId/${match.id}",
+        ).map { Intent(Intent.ACTION_VIEW, Uri.parse(it)).setPackage(pkg) }
+            .firstOrNull { pm.resolveActivity(it, 0) != null }
     }
 
     /** Web search for this exact game, in Spanish for South American competitions. */

@@ -528,7 +528,7 @@ private fun MatchScreen(m: Match, onBack: () -> Unit) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
             HorizontalDivider()
             if (channels.isEmpty()) Text("No US channel listed for this game yet.")
-            else ChannelCards(channels)
+            else ChannelCards(channels, m)
             TextButton(onClick = { Streaming.openUrl(context, Streaming.findMoreUrl(m)) }) {
                 Icon(Icons.Default.Search, null, Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))
@@ -539,12 +539,12 @@ private fun MatchScreen(m: Match, onBack: () -> Unit) {
 }
 
 @Composable
-private fun ChannelCards(channels: List<Channel>) {
+private fun ChannelCards(channels: List<Channel>, match: Match) {
     val context = LocalContext.current
     // Names show right away; buttons appear once the (slow) installed-app check finishes off the main
     // thread. Re-checked each time the screen opens, so a newly installed app gets its button.
     val options by produceState(channels.map { WatchOption(it.name, it.country, null) }, channels) {
-        value = withContext(Dispatchers.IO) { Streaming.options(context, channels) }
+        value = withContext(Dispatchers.IO) { Streaming.options(context, channels, match) }
     }
     options.forEach { o ->
         Card(Modifier.fillMaxWidth()) {
