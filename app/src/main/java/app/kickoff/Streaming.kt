@@ -64,9 +64,18 @@ object Streaming {
     /** Separator between channel names on cards and in alerts: a bullet, bigger than "·". */
     const val DOT = " • "
 
-    /** FotMob's US channels and streaming services for a game, e.g. TUDN, ViX, Paramount+. */
-    fun channels(match: Match): List<Channel> =
-        match.tv[COUNTRY].orEmpty().map { shortName(it) }.distinct().map { Channel(it, COUNTRY) }
+    /** Bolivia's channels, for Bolivian league and cup games with no US channel (see BoliviaTv). */
+    const val BOLIVIA = "BO"
+
+    /**
+     * FotMob's US channels and streaming services for a game, e.g. TUDN, ViX, Paramount+; with none,
+     * the Bolivian channel if it's a Bolivian game that has one (e.g. Entel Gol).
+     */
+    fun channels(match: Match): List<Channel> {
+        val us = match.tv[COUNTRY].orEmpty()
+        val (names, country) = if (us.isNotEmpty()) us to COUNTRY else match.tv[BOLIVIA].orEmpty() to BOLIVIA
+        return names.map { shortName(it) }.distinct().map { Channel(it, country) }
+    }
 
     /**
      * Shorter, combined names: ESPN Select (formerly ESPN+) shows as "ESPN+"; ESPN Deportes,
@@ -85,7 +94,11 @@ object Streaming {
     }
 
     /** Short text for notifications and game cards, e.g. "TUDN, ViX, Paramount+". */
-    fun summary(match: Match, separator: String = ", "): String = channels(match).joinToString(separator) { it.name }
+    fun summary(match: Match, separator: String = ", "): String {
+        val list = channels(match)
+        // Bolivian channels say so: they're shown in Bolivia, not the US.
+        return list.joinToString(separator) { it.name } + if (list.any { it.country == BOLIVIA }) " (Bolivia)" else ""
+    }
 
     /** Slow (reads every installed app's name): call off the main thread. */
     fun options(context: Context, channels: List<Channel>, match: Match? = null): List<WatchOption> {

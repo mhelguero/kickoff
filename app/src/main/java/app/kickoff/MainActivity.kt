@@ -739,7 +739,10 @@ private fun MatchScreen(m: Match, onBack: () -> Unit) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
             HorizontalDivider()
             if (channels.isEmpty()) Text("No US channel listed for this game yet.")
-            else ChannelCards(channels, m)
+            else {
+                if (channels.any { it.country == Streaming.BOLIVIA }) Text("No US channel listed. Shown in Bolivia on:")
+                ChannelCards(channels, m)
+            }
             TextButton(onClick = { Streaming.openUrl(context, Streaming.findMoreUrl(m)) }) {
                 Icon(Icons.Default.Search, null, Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))

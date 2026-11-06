@@ -29,6 +29,7 @@ private const val HOUR = 60 * MIN
 const val WATCH_LEAD_MS = 3 * MIN
 const val WATCH_MAX_MS = 4 * HOUR
 private val ESPN_DAY_ZONE = ZoneId.of("America/New_York")
+private val BOLIVIA_ZONE = ZoneId.of("America/La_Paz")
 private const val PRE_GRACE_MS = 90 * MIN
 
 object Tracker {
@@ -87,6 +88,7 @@ object Tracker {
             )
         }
         findChannels(now)
+        findBolivianChannels(now)
         Store.state.value.matches.values.forEach { handleTransition(context, it) }
         scheduleNextWatch(context)
     }
@@ -139,6 +141,44 @@ object Tracker {
                 found[id]?.let { (fid, list) -> m.copy(fotmobId = fid, tv = m.tv + (my to list)) } ?: m
             }
             s.copy(matches = matches)
+        }
+    }
+
+    /**
+     * Bolivian league and cup games rarely have a US channel: list the Bolivian one instead (usually
+     * Entel Gol), from futbolenvivobolivia.com, matched by the game's date in Bolivia and its teams.
+     * Re-checked each refresh while the game is upcoming; a failed read keeps what we had.
+     */
+    private fun findBolivianChannels(now: Long) {
+        val s0 = Store.state.value
+        val games = s0.matches.values.filter { m ->
+            m.leagueSlug.startsWith("bol.") && m.state != "post" && m.dateMillis <= now + 14 * 24 * HOUR &&
+                m.tv[Streaming.COUNTRY].isNullOrEmpty()
+        }
+        if (games.isEmpty()) return
+        val pages = mutableMapOf<String, List<BoliviaTv.Listing>>()   // followed team id -> its listings
+        val found = mutableMapOf<String, List<String>>()               // match id -> Bolivian channels
+        for (m in games) {
+            val date = Instant.ofEpochMilli(m.dateMillis).atZone(BOLIVIA_ZONE).toLocalDate()
+            val listing = s0.teams.filter { it.id in m.teamIds }.firstNotNullOfOrNull { team ->
+                val list = pages.getOrPut(team.id) {
+                    runCatching { BoliviaTv.listings(team.name) }.onFailure { Log.w(TAG, "Bolivia TV ${team.name}", it) }
+                        .getOrDefault(emptyList())
+                }
+                // The page is this team's, and a team plays once a day: the date settles it, the
+                // names (which can differ: "GV San José") only pick between rows if ever needed.
+                val sameDay = list.filter { it.date == date }
+                sameDay.firstOrNull { BoliviaTv.sameTeam(it.home, m.home) && BoliviaTv.sameTeam(it.away, m.away) }
+                    ?: sameDay.singleOrNull()
+            } ?: continue
+            found[m.id] = listing.channels
+        }
+        Log.i(TAG, "Bolivia TV: ${games.size} games, ${found.size} listed")
+        if (found.isEmpty()) return
+        Store.update { s ->
+            s.copy(matches = s.matches.mapValues { (id, m) ->
+                found[id]?.let { m.copy(tv = m.tv + (Streaming.BOLIVIA to it)) } ?: m
+            })
         }
     }
 

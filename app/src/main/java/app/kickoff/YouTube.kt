@@ -45,8 +45,9 @@ object YouTube {
             val snippet = item["snippet"].obj
             val title = norm(snippet.str("title").orEmpty())
             val titleWords = Regex("[a-z0-9]+").findAll(title).map { it.value }.toSet()
-            // Both teams named, called highlights, and not a video game or a reaction video.
-            val ok = HIGHLIGHT.containsMatchIn(title) && !FAKE.containsMatchIn(title) &&
+            // Both teams named, called highlights (or giving the score), and not a video game or a reaction video.
+            // Any uploader: fan uploads are often just the score ("Bolivar 3-1 The Strongest").
+            val ok = (HIGHLIGHT.containsMatchIn(title) || SCORE.containsMatchIn(title)) && !FAKE.containsMatchIn(title) &&
                 homeWords.any { it in titleWords } && awayWords.any { it in titleWords }
             if (!ok) return@firstNotNullOfOrNull null
             val thumbs = snippet["thumbnails"].obj
@@ -74,6 +75,7 @@ object YouTube {
 
     private val HIGHLIGHT = Regex("""\b(highlights?|resumen|goles|golazos?|lo mejor|compacto|melhores momentos|gols)\b""")
     private val FAKE = Regex("""\b(efootball|fifa|pes|fc ?2\d|ea sports|simulation|gameplay|prediction|preview|reaction|reacts?|watch ?along|live|en vivo|en directo|previa|pronostico)\b""")
+    private val SCORE = Regex("""\b\d{1,2} ?[-x–] ?\d{1,2}\b""")
     private val GENERIC = setOf("club", "football", "futbol", "calcio", "sport", "sports")
 
     /**
