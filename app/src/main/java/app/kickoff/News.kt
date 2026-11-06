@@ -69,6 +69,8 @@ object News {
         _loading.value = true
         try {
             val since = System.currentTimeMillis() - WEEK
+            // Highlights can go further back (the Highlights feed's 1 or 3 weeks).
+            val highlightsSince = System.currentTimeMillis() - Store.state.value.highlightWeeks.coerceIn(1, 3) * WEEK
             val missing = java.util.Collections.synchronizedList(mutableListOf<Missing>())
             val all = coroutineScope {
                 teams.map { t ->
@@ -80,7 +82,7 @@ object News {
                         ).awaitAll().flatten()
                         // Highlights cards first: when the feed has the same video, the card (with its
                         // competition) is the one kept.
-                        runCatching { highlights(context, t, since, missing) }.onFailure {
+                        runCatching { highlights(context, t, highlightsSince, missing) }.onFailure {
                             Log.w("News", "highlights ${t.name}", it)
                             missing += Missing(t.id, t.name, "Couldn't get recent games from FotMob (${it.message ?: it.javaClass.simpleName}).")
                         }.getOrDefault(emptyList()) +
@@ -172,7 +174,9 @@ object News {
                 ?: g.fotmobId?.let { id -> runCatching { FotMob.highlights(id) }.getOrNull() }
                     ?.also { synchronized(highlightUrls) { highlightUrls[g.key] = it } }
                 ?: youtubeSearch(context, g, now)
+            // Only the last week's games say why they have none: older ones would just fill the feed.
             if (h == null) {
+                if (g.startMillis < now - WEEK) return@mapNotNull null
                 missing += Missing(team.id, "${g.home} ${g.score} ${g.away}", missingReason(g, now))
                 return@mapNotNull null
             }
@@ -207,8 +211,8 @@ object News {
         if (video.isFailure) return null
         val v = video.getOrNull()
         Store.update { s ->
-            // Searches older than 10 days are for games no longer shown.
-            val kept = s.videoSearches.filterValues { now - it.checkedAt < 10 * 24 * HOUR }
+            // Searches older than 4 weeks are for games no longer shown (the feed goes back 3 at most).
+            val kept = s.videoSearches.filterValues { now - it.checkedAt < 28 * 24 * HOUR }
             s.copy(videoSearches = kept + (g.key to VideoSearch(v?.url, v?.image, now, SEARCH_VERSION)))
         }
         return v?.let { FotMob.Highlight(it.url, it.image) }

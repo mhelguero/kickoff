@@ -484,6 +484,19 @@ private fun HomeScreen(
                             FilterChip(selected = !showHighlights, onClick = { showHighlights = false }, label = { Text("News") })
                         }
                     }
+                    // How far back highlights go; changing it reloads the feed.
+                    if (showHighlights) item(key = "highlight-weeks") {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            listOf(1 to "Last week", 3 to "Last 3 weeks").forEach { (weeks, label) ->
+                                FilterChip(selected = state.highlightWeeks == weeks, label = { Text(label) }, onClick = {
+                                    if (state.highlightWeeks != weeks) {
+                                        Store.update { it.copy(highlightWeeks = weeks) }
+                                        scope.launch { News.load(context, state.teams) }
+                                    }
+                                })
+                            }
+                        }
+                    }
                     if (state.teams.size > 1) item(key = "news-teams") {
                         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             FilterChip(selected = only == null, onClick = { newsTeam = null }, label = { Text("All") })
@@ -502,7 +515,7 @@ private fun HomeScreen(
                     if (shown.isEmpty()) item {
                         Hint(when {
                             newsLoading -> "Loading news…"
-                            showHighlights -> "No highlights from the last week."
+                            showHighlights -> if (state.highlightWeeks == 3) "No highlights from the last 3 weeks." else "No highlights from the last week."
                             else -> "No news from the last week."
                         })
                     }
@@ -600,7 +613,8 @@ private fun GameCard(m: Match, teams: List<Team>, muted: Boolean? = null, onClic
                     modifier = Modifier.weight(1f))
                 // Just the minute ("63'") or "HT": the Live section already says it's live.
                 if (live) LiveBadge(m.statusLabel.removePrefix("LIVE ").trim())
-                else Text(m.statusLabel.ifEmpty { m.kickoffTime() }, style = MaterialTheme.typography.labelLarge)
+                // As big as the alerts bell beside it.
+                else Text(m.statusLabel.ifEmpty { m.kickoffTime() }, style = MaterialTheme.typography.titleLarge)
                 // This game's alerts on or off; finished games (muted = null) have no more alerts.
                 muted?.let { off ->
                     val context = LocalContext.current
