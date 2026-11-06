@@ -101,6 +101,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -108,6 +109,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.time.Instant
@@ -321,7 +323,17 @@ private fun HomeScreen(
     }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     LaunchedEffect(Unit) {
-        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) { checkUpdate() }
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            Updater.onScreen = true
+            try {
+                checkUpdate()
+                awaitCancellation()
+            } finally {
+                // Left the screen: a new version installs by itself a minute later (Android 12+).
+                Updater.onScreen = false
+                if (update != null) Updater.scheduleAutoUpdate(context)
+            }
+        }
     }
     fun installUpdate(release: Updater.Release) {
         // Android asks once to let Kickoff install apps; the user comes back and taps Update again.
@@ -570,6 +582,8 @@ private fun GameCard(m: Match, teams: List<Team>, muted: Boolean? = null, onClic
     ) {
         Column(Modifier.padding(20.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
+                // The followed team's crest (the one whose color the card has), then the competition.
+                teams.firstOrNull { it.id in m.teamIds }?.let { TeamCrest(it.id, background, size = 24.dp, gap = 8.dp) }
                 Text(m.league, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold,
                     modifier = Modifier.weight(1f))
                 // Just the minute ("63'") or "HT": the Live section already says it's live.
@@ -715,12 +729,13 @@ private fun Thumbnail(url: String) {
 }
 
 /**
- * A team's crest from ESPN (whose team ids the app uses), with room after it; nothing if it can't
- * load. A crest that would blend into the card ([background]: the team color, or the default card
- * color) sits on a contrasting circle, e.g. Juventus' black crest on its black card.
+ * A team's crest from ESPN (whose team ids the app uses), [size] across with [gap] after it;
+ * nothing if it can't load. A dark crest that can't be seen on its card ([background]: the team
+ * color, or the default card color) sits on a white circle, e.g. Juventus' black crest on its
+ * black card. Every other crest is shown as it is.
  */
 @Composable
-private fun TeamCrest(teamId: String, background: Color?) {
+private fun TeamCrest(teamId: String, background: Color?, size: Dp = 40.dp, gap: Dp = 12.dp) {
     val context = LocalContext.current
     val url = "https://a.espncdn.com/i/teamlogos/soccer/500/$teamId.png"
     val crest by produceState<Pair<ImageBitmap, Float>?>(null, url) {
@@ -728,15 +743,13 @@ private fun TeamCrest(teamId: String, background: Color?) {
     }
     val cardTone = (background ?: CardDefaults.cardColors().containerColor).luminance()
     crest?.let { (image, tone) ->
-        if (kotlin.math.abs(tone - cardTone) < 0.2f) {
-            // Light circle behind a dark crest, dark behind a light one.
-            val circle = if (tone < 0.5f) Color.White else Color.Black
-            Image(image, contentDescription = null, contentScale = ContentScale.Fit,
-                modifier = Modifier.size(40.dp).background(circle, CircleShape).padding(5.dp))
-        } else {
-            Image(image, contentDescription = null, modifier = Modifier.size(40.dp), contentScale = ContentScale.Fit)
-        }
-        Spacer(Modifier.width(12.dp))
+        // Contrast ratio (as for text): under 1.6, a crest no lighter than mid-gray is lost on its card.
+        val contrast = (maxOf(tone, cardTone) + 0.05f) / (minOf(tone, cardTone) + 0.05f)
+        val hidden = tone < 0.2f && contrast < 1.6f
+        Image(image, contentDescription = null, contentScale = ContentScale.Fit,
+            modifier = if (hidden) Modifier.size(size).background(Color.White, CircleShape).padding(size / 8)
+            else Modifier.size(size))
+        Spacer(Modifier.width(gap))
     }
 }
 

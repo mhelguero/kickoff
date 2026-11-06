@@ -89,7 +89,7 @@ object Updater {
      * afterwards. On Android 12+, once Kickoff installed itself this way, later updates may not
      * even need the confirmation. Slow (copies the file): call off the main thread.
      */
-    fun install(context: Context, file: File) {
+    fun install(context: Context, file: File, background: Boolean = false) {
         val installer = context.packageManager.packageInstaller
         val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
             setAppPackageName(context.packageName)
@@ -106,7 +106,8 @@ object Updater {
                 }
                 // Android fills in the result, so the intent must be mutable on Android 12+.
                 val flags = PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0)
-                val result = PendingIntent.getBroadcast(context, id, Intent(context, InstallReceiver::class.java), flags)
+                val answer = Intent(context, InstallReceiver::class.java).putExtra(InstallReceiver.BACKGROUND, background)
+                val result = PendingIntent.getBroadcast(context, id, answer, flags)
                 session.commit(result.intentSender)
             }
         } catch (e: Exception) {
@@ -114,6 +115,32 @@ object Updater {
             throw e
         }
     }
+
+    /**
+     * Installs a newer release by itself, for when Kickoff isn't on screen (an update closes the
+     * app). Only on Android 12+, where Kickoff can update itself without asking once it installed
+     * the current version itself; if Android still wants the user's OK, it's left for the in-app
+     * Update button. Slow: call off the main thread.
+     */
+    fun autoUpdate(context: Context) {
+        if (Build.VERSION.SDK_INT < 31 || !canInstall(context)) return
+        val release = checkForUpdate(context) ?: return
+        Log.i("Updater", "installing ${release.versionName} in the background")
+        install(context, download(context, release), background = true)
+    }
+
+    /** Check for (and install) an update soon, once the app has left the screen. */
+    fun scheduleAutoUpdate(context: Context) {
+        val req = androidx.work.OneTimeWorkRequestBuilder<UpdateWorker>()
+            .setInitialDelay(1, java.util.concurrent.TimeUnit.MINUTES)
+            .setConstraints(androidx.work.Constraints(requiredNetworkType = androidx.work.NetworkType.CONNECTED))
+            .build()
+        androidx.work.WorkManager.getInstance(context)
+            .enqueueUniqueWork("auto-update", androidx.work.ExistingWorkPolicy.REPLACE, req)
+    }
+
+    /** True while Kickoff is on screen: an update then waits, rather than closing it mid-use. */
+    @Volatile var onScreen = false
 
     private fun updatesDir(context: Context) = File(context.cacheDir, "updates")
 
@@ -146,9 +173,19 @@ object Updater {
  * on success there's nothing to do (Kickoff restarts as the new version); a failure is reported.
  */
 class InstallReceiver : BroadcastReceiver() {
+    companion object {
+        const val BACKGROUND = "background"
+    }
+
     override fun onReceive(context: Context, intent: Intent) {
         when (val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)) {
             PackageInstaller.STATUS_PENDING_USER_ACTION -> {
+                // A background update that Android wants confirmed: drop it; the in-app banner offers it.
+                if (intent.getBooleanExtra(BACKGROUND, false)) {
+                    val id = intent.getIntExtra(PackageInstaller.EXTRA_SESSION_ID, -1)
+                    runCatching { context.packageManager.packageInstaller.abandonSession(id) }
+                    return
+                }
                 val confirm = if (Build.VERSION.SDK_INT >= 33) intent.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)
                 else @Suppress("DEPRECATION") intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT)
                 confirm?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -160,8 +197,18 @@ class InstallReceiver : BroadcastReceiver() {
             else -> {
                 val message = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)
                 Log.w("Updater", "install failed: $status $message")
-                Toast.makeText(context, "Update failed${message?.let { ": $it" }.orEmpty()}", Toast.LENGTH_LONG).show()
+                // Background updates fail quietly: the in-app banner still offers the update.
+                if (!intent.getBooleanExtra(BACKGROUND, false))
+                    Toast.makeText(context, "Update failed${message?.let { ": $it" }.orEmpty()}", Toast.LENGTH_LONG).show()
             }
         }
+    }
+}
+
+/** Installs an update while Kickoff is off screen (see [Updater.autoUpdate]). */
+class UpdateWorker(ctx: Context, params: androidx.work.WorkerParameters) : androidx.work.CoroutineWorker(ctx, params) {
+    override suspend fun doWork(): androidx.work.ListenableWorker.Result {
+        if (!Updater.onScreen) runCatching { Updater.autoUpdate(applicationContext) }.onFailure { Log.w("Updater", "auto update", it) }
+        return androidx.work.ListenableWorker.Result.success()
     }
 }

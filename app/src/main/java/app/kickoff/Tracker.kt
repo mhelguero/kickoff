@@ -339,6 +339,8 @@ class RefreshWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ct
         Tracker.refresh(applicationContext)
         // Keep highlights current too (YouTube searches are saved, so the Feed shows them at once).
         runCatching { News.load(applicationContext, Store.state.value.teams) }
+        // Install any new version while the app isn't on screen.
+        if (!Updater.onScreen) runCatching { Updater.autoUpdate(applicationContext) }.onFailure { Log.w(TAG, "auto update", it) }
         return Result.success()
     }
 }
@@ -348,6 +350,8 @@ class FeedWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, 
     override suspend fun doWork(): Result {
         Store.init(applicationContext)
         runCatching { News.load(applicationContext, Store.state.value.teams) }
+        // Install any new version while the app isn't on screen.
+        if (!Updater.onScreen) runCatching { Updater.autoUpdate(applicationContext) }.onFailure { Log.w(TAG, "auto update", it) }
         return Result.success()
     }
 }
