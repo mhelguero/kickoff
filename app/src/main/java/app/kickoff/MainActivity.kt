@@ -39,6 +39,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -328,10 +331,13 @@ private fun HomeScreen(
         }
         updating = true
         scope.launch {
+            // Downloading, then handing the file to Android's installer, which then asks to confirm.
             val file = withContext(Dispatchers.IO) { runCatching { Updater.download(context, release) } }
+            file.onSuccess { f ->
+                withContext(Dispatchers.IO) { runCatching { Updater.install(context, f) } }
+                    .onFailure { Toast.makeText(context, "Couldn't start the update. Try again.", Toast.LENGTH_LONG).show() }
+            }.onFailure { Toast.makeText(context, "Couldn't download the update. Try again.", Toast.LENGTH_LONG).show() }
             updating = false
-            file.onSuccess { runCatching { Updater.install(context, it) } }
-                .onFailure { Toast.makeText(context, "Couldn't download the update. Try again.", Toast.LENGTH_LONG).show() }
         }
     }
     val now = System.currentTimeMillis()
@@ -368,16 +374,28 @@ private fun HomeScreen(
             modifier = Modifier.fillMaxSize().padding(pad),
         ) {
             LazyColumn(
-                Modifier.fillMaxSize().pointerInput(Unit) {
-                    // Swipe left for Feed, right for Games (vertical scrolling is unaffected).
-                    val distance = 80.dp.toPx()
+                // Phone width even sideways or on a tablet: centered, not stretched across the screen.
+                Modifier.fillMaxSize().wrapContentWidth().widthIn(max = MAX_CONTENT_WIDTH).fillMaxWidth().pointerInput(Unit) {
+                    // Swipe left for Feed, right for Games (vertical scrolling is unaffected). A short
+                    // swipe is enough: the tab switches as soon as it's dragged far enough, or on
+                    // lifting after a quick flick.
+                    val distance = 36.dp.toPx()
+                    val flickDistance = 12.dp.toPx()
+                    val flickSpeed = 600.dp.toPx()   // per second
                     var dragged = 0f
+                    var switched = false
+                    val velocity = VelocityTracker()
+                    fun switchTo(left: Boolean) { tab = if (left) 1 else 0; switched = true }
                     detectHorizontalDragGestures(
-                        onDragStart = { dragged = 0f },
-                        onHorizontalDrag = { _, dx -> dragged += dx },
+                        onDragStart = { dragged = 0f; switched = false; velocity.resetTracking() },
+                        onHorizontalDrag = { change, dx ->
+                            velocity.addPosition(change.uptimeMillis, change.position)
+                            dragged += dx
+                            if (!switched && kotlin.math.abs(dragged) > distance) switchTo(dragged < 0)
+                        },
                         onDragEnd = {
-                            if (dragged < -distance) tab = 1
-                            else if (dragged > distance) tab = 0
+                            val vx = velocity.calculateVelocity().x
+                            if (!switched && kotlin.math.abs(dragged) > flickDistance && kotlin.math.abs(vx) > flickSpeed) switchTo(vx < 0)
                         },
                     )
                 },
@@ -665,6 +683,9 @@ private fun NewsCard(n: NewsItem, teams: List<Team>) {
     }
 }
 
+/** Content stays phone-width (a large phone in portrait) when the phone is sideways. */
+private val MAX_CONTENT_WIDTH = 480.dp
+
 /** A video's length: "9:42", or "1:02:05" past an hour. */
 private fun videoLength(secs: Int): String {
     val h = secs / 3600
@@ -741,7 +762,8 @@ private fun MatchScreen(m: Match, onBack: () -> Unit) {
         },
     ) { pad ->
         Column(
-            Modifier.fillMaxSize().padding(pad).verticalScroll(rememberScrollState()).padding(16.dp),
+            Modifier.fillMaxSize().padding(pad).verticalScroll(rememberScrollState())
+                .wrapContentWidth().widthIn(max = MAX_CONTENT_WIDTH).fillMaxWidth().padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text(m.league, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
