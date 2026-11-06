@@ -32,7 +32,9 @@ object YouTube {
     /** The best highlights video of [home] vs [away] uploaded after [kickoffMillis], or null. */
     fun findHighlights(context: Context, home: String, away: String, kickoffMillis: Long): Video? {
         if (!enabled) return null
-        val q = Uri.encode("$home vs $away highlights")
+        // One search for English and Spanish titles ("|" is YouTube's OR): Bolivian and other
+        // Latin American highlights are usually "resumen" or "goles".
+        val q = Uri.encode("$home vs $away highlights|resumen|goles")
         val after = Instant.ofEpochMilli(kickoffMillis).toString()
         val root = get(context, "https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=10" +
             "&order=relevance&q=$q&publishedAfter=$after&key=${BuildConfig.YOUTUBE_API_KEY}")
@@ -70,13 +72,18 @@ object YouTube {
         }.toMap()
     }
 
-    private val HIGHLIGHT = Regex("""\b(highlights?|resumen|melhores momentos)\b""")
-    private val FAKE = Regex("""\b(efootball|fifa|pes|fc ?2\d|ea sports|simulation|gameplay|prediction|preview|reaction|reacts?|watch ?along|live)\b""")
+    private val HIGHLIGHT = Regex("""\b(highlights?|resumen|goles|golazos?|lo mejor|compacto|melhores momentos|gols)\b""")
+    private val FAKE = Regex("""\b(efootball|fifa|pes|fc ?2\d|ea sports|simulation|gameplay|prediction|preview|reaction|reacts?|watch ?along|live|en vivo|en directo|previa|pronostico)\b""")
     private val GENERIC = setOf("club", "football", "futbol", "calcio", "sport", "sports")
 
-    /** Distinctive words of a team name ("Houston Dynamo FC" -> houston, dynamo). */
-    private fun words(team: String) = Regex("[a-z0-9]+").findAll(norm(team)).map { it.value }
-        .filter { it.length >= 4 && it !in GENERIC }.toSet()
+    /**
+     * Distinctive words of a team name ("Houston Dynamo FC" -> houston, dynamo). A name with none
+     * that long (e.g. "ABB") keeps its short words instead, so the team can still be matched.
+     */
+    private fun words(team: String): Set<String> {
+        val all = Regex("[a-z0-9]+").findAll(norm(team)).map { it.value }.filter { it !in GENERIC }.toSet()
+        return all.filter { it.length >= 4 }.toSet().ifEmpty { all.filter { it.length >= 2 }.toSet() }
+    }
 
     private fun norm(s: String) = Normalizer.normalize(s, Normalizer.Form.NFD).replace(Regex("""\p{Mn}+"""), "").lowercase()
 
