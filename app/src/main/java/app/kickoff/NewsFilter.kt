@@ -5,7 +5,7 @@ import java.text.Normalizer
 /**
  * Keeps only factual team news: a headline must name someone in the team's squad (players and
  * coach), or be about a transfer, or name the team with a news word (injury, confirms, statement...).
- * Highlight reels are always kept. Opinion, ratings, reactions, previews, threads, lists, game
+ * Highlight videos are always kept (highlight articles never). Opinion, ratings, reactions, previews, threads, lists, game
  * write-ups and league-wide pieces are dropped. Tuned on a real week of Real Madrid and Houston Dynamo headlines.
  */
 object NewsFilter {
@@ -57,10 +57,11 @@ object NewsFilter {
             .filter { it.length >= 4 && it !in COMMON }
             .toSet()
 
-    fun keep(title: String, teamName: String, people: Set<String>): Boolean {
+    /** [isVideo]: the link is a video (e.g. YouTube), so a "Highlights" title is a highlight reel. */
+    fun keep(title: String, teamName: String, people: Set<String>, isVideo: Boolean = false): Boolean {
         val t = norm(title)
-        // Highlight reels are kept, game or not.
-        if (HIGHLIGHTS.containsMatchIn(t)) return true
+        // Highlight reels are kept, game or not; articles named "highlights" are not.
+        if (HIGHLIGHTS.containsMatchIn(t)) return isVideo
         if (EXCLUDE.containsMatchIn(t)) return false
         // Letters and digits only, so "Mbappé's" still matches "mbappe".
         if (Regex("""[a-z0-9]+""").findAll(t).any { it.value in people }) return true

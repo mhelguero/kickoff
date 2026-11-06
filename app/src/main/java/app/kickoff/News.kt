@@ -30,8 +30,11 @@ data class NewsItem(
     val writer: String = "",
     val image: String? = null,         // thumbnail, for highlight videos
 ) {
-    /** A highlights video: a game's highlights card, or a highlight reel from the news. */
-    val isHighlight get() = image != null || Regex("""\bhighlights?\b""", RegexOption.IGNORE_CASE).containsMatchIn(title)
+    /** The link is a video (YouTube), not an article. */
+    val isVideo get() = android.net.Uri.parse(url).host.orEmpty().let { "youtube" in it || "youtu.be" in it } || source == "YouTube"
+
+    /** A highlights video: a game's highlights card, or a highlight reel from the news (never an article). */
+    val isHighlight get() = isVideo && (image != null || Regex("""\bhighlights?\b""", RegexOption.IGNORE_CASE).containsMatchIn(title))
 }
 
 /**
@@ -64,7 +67,7 @@ object News {
                             async { runCatching { fotmob(t, since) }.onFailure { Log.w("News", "FotMob ${t.name}", it) }.getOrDefault(emptyList()) },
                             async { runCatching { espn(t, since) }.onFailure { Log.w("News", "ESPN ${t.name}", it) }.getOrDefault(emptyList()) },
                         ).awaitAll().flatten()
-                        items.filter { NewsFilter.keep(it.title, t.name, people) } +
+                        items.filter { NewsFilter.keep(it.title, t.name, people, it.isVideo) } +
                             runCatching { highlights(t, since) }.onFailure { Log.w("News", "highlights ${t.name}", it) }.getOrDefault(emptyList())
                     }
                 }.awaitAll().flatten()

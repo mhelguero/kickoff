@@ -276,6 +276,7 @@ private fun HomeScreen(
     var showSearch by remember { mutableStateOf(false) }
     var removing by remember { mutableStateOf<Team?>(null) }
     var testStep by rememberSaveable { mutableIntStateOf(0) }
+    var editingTeams by rememberSaveable { mutableStateOf(false) }
 
     // Games or News tab. News loads when its tab is shown (again after 15 minutes or a team change).
     var tab by rememberSaveable { mutableIntStateOf(0) }
@@ -339,6 +340,9 @@ private fun HomeScreen(
                     Spacer(Modifier.width(8.dp))
                     Image(painterResource(R.drawable.ball), contentDescription = null, modifier = Modifier.size(28.dp))
                 }
+            }, actions = {
+                // The followed teams (remove, add) show only while editing.
+                TextButton(onClick = { editingTeams = !editingTeams }) { Text(if (editingTeams) "Done" else "Edit teams") }
             })
         },
     ) { pad ->
@@ -379,7 +383,8 @@ private fun HomeScreen(
                         }
                     }
                 }
-                item {
+                // With no teams there is nothing else to show, so the list is open.
+                if (editingTeams || state.teams.isEmpty()) item {
                     Text("Teams", style = MaterialTheme.typography.titleMedium)
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         state.teams.forEach { team ->
@@ -405,13 +410,15 @@ private fun HomeScreen(
                 if (tab == 1) {
                     // A removed team's filter falls back to all teams.
                     val only = newsTeam?.takeIf { id -> state.teams.any { it.id == id } }
-                    item(key = "news-teams") {
+                    // Highlights on its own row; it combines with the team choice below it.
+                    item(key = "news-highlights") {
+                        FilterChip(selected = highlightsOnly, onClick = { highlightsOnly = !highlightsOnly },
+                            label = { Text("Highlights") })
+                    }
+                    if (state.teams.size > 1) item(key = "news-teams") {
                         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            // Combines with the team choice: e.g. only Real Madrid's highlights.
-                            FilterChip(selected = highlightsOnly, onClick = { highlightsOnly = !highlightsOnly },
-                                label = { Text("Highlights") })
-                            if (state.teams.size > 1) FilterChip(selected = only == null, onClick = { newsTeam = null }, label = { Text("All") })
-                            if (state.teams.size > 1) state.teams.forEach { team ->
+                            FilterChip(selected = only == null, onClick = { newsTeam = null }, label = { Text("All") })
+                            state.teams.forEach { team ->
                                 // Tapping the selected team again shows all teams.
                                 FilterChip(selected = only == team.id,
                                     onClick = { newsTeam = if (only == team.id) null else team.id },
