@@ -607,16 +607,23 @@ private fun NewsCard(n: NewsItem, teams: List<Team>) {
                         value = withContext(Dispatchers.IO) { LinkApps.icon(context, n.url) }
                     }
                     appIcon?.let { Image(it, contentDescription = null, modifier = Modifier.size(20.dp)) }
+                    // Highlights: the competition next to the icon ("Champions League").
+                    if (n.isHighlight && n.writer.isNotBlank()) {
+                        Spacer(Modifier.width(6.dp))
+                        Text(n.writer, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+                    }
                     Spacer(Modifier.weight(1f))
                     Text(timeFmt.format(Instant.ofEpochMilli(n.timeMillis).atZone(ZoneId.systemDefault())),
                         style = MaterialTheme.typography.labelLarge, color = content.copy(alpha = 0.8f))
                 }
                 Spacer(Modifier.height(4.dp))
                 Text(n.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.height(4.dp))
-                // Writer and outlet, e.g. "Sam Marsden • ESPN", or just the outlet.
-                Text(listOf(n.writer, n.source).filter { it.isNotBlank() }.distinct().joinToString(Streaming.DOT),
-                    style = MaterialTheme.typography.labelLarge, color = content.copy(alpha = 0.8f))
+                // Articles: writer and outlet, e.g. "Sam Marsden • ESPN". Highlights have no writer line.
+                if (!n.isHighlight) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(listOf(n.writer, n.source).filter { it.isNotBlank() }.distinct().joinToString(Streaming.DOT),
+                        style = MaterialTheme.typography.labelLarge, color = content.copy(alpha = 0.8f))
+                }
             }
         }
     }

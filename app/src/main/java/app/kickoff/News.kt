@@ -34,7 +34,7 @@ data class NewsItem(
     val isVideo get() = android.net.Uri.parse(url).host.orEmpty().let { "youtube" in it || "youtu.be" in it } || source == "YouTube"
 
     /** A highlights video: a game's highlights card, or a highlight reel from the news (never an article). */
-    val isHighlight get() = isVideo && (image != null || Regex("""\bhighlights?\b""", RegexOption.IGNORE_CASE).containsMatchIn(title))
+    val isHighlight get() = isVideo && Regex("""\bhighlights?\b""", RegexOption.IGNORE_CASE).containsMatchIn(title)
 }
 
 /**
@@ -67,13 +67,17 @@ object News {
                             async { runCatching { fotmob(t, since) }.onFailure { Log.w("News", "FotMob ${t.name}", it) }.getOrDefault(emptyList()) },
                             async { runCatching { espn(t, since) }.onFailure { Log.w("News", "ESPN ${t.name}", it) }.getOrDefault(emptyList()) },
                         ).awaitAll().flatten()
-                        items.filter { NewsFilter.keep(it.title, t.name, people, it.isVideo) } +
-                            runCatching { highlights(t, since) }.onFailure { Log.w("News", "highlights ${t.name}", it) }.getOrDefault(emptyList())
+                        // Highlights cards first: when the feed has the same video, the card (with its
+                        // competition) is the one kept.
+                        runCatching { highlights(t, since) }.onFailure { Log.w("News", "highlights ${t.name}", it) }.getOrDefault(emptyList()) +
+                            items.filter { NewsFilter.keep(it.title, t.name, people, it.isVideo) }
                     }
                 }.awaitAll().flatten()
             }
             // The same story can come from both sources, or be about two followed teams.
-            _items.value = all.sortedByDescending { it.timeMillis }.distinctBy { it.title.lowercase().filter(Char::isLetterOrDigit) }
+            // A video counts once however it's titled.
+            _items.value = all.distinctBy { youtubeId(it.url) ?: it.title.lowercase().filter(Char::isLetterOrDigit) }
+                .sortedByDescending { it.timeMillis }
             lastLoad = System.currentTimeMillis()
         } finally {
             _loading.value = false
@@ -116,7 +120,12 @@ object News {
     /** The video id in a YouTube link ("watch?v=ID" or "youtu.be/ID"). */
     private fun youtubeId(url: String): String? {
         val uri = android.net.Uri.parse(url)
-        return uri.getQueryParameter("v") ?: uri.lastPathSegment?.takeIf { "youtu.be" in uri.host.orEmpty() }
+        val host = uri.host.orEmpty()
+        return when {
+            "youtu.be" in host -> uri.lastPathSegment
+            "youtube" in host -> uri.getQueryParameter("v")
+            else -> null
+        }
     }
 
     /** FotMob's team news, 20 a page, newest first, back to [since]. */
@@ -134,7 +143,9 @@ object News {
                 oldest = minOf(oldest, time)
                 val path = a["page"].obj.str("url") ?: continue
                 val url = if (path.startsWith("/")) "https://www.fotmob.com$path" else path
-                if (time >= since) out += NewsItem(title.trim(), a.str("sourceStr").orEmpty(), time, url, team.id)
+                // Videos (highlight reels) get their thumbnail like the highlights cards.
+                val image = if (youtubeId(url) != null) a.str("imageUrl") else null
+                if (time >= since) out += NewsItem(title.trim(), a.str("sourceStr").orEmpty(), time, url, team.id, image = image)
             }
             if (oldest < since) break
         }
