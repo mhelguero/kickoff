@@ -31,8 +31,9 @@ data class NewsItem(
 )
 
 /**
- * The last week's headlines for each followed team, from FotMob (which gathers SI, BBC, talkSPORT,
- * its own reporters and more) and ESPN. Kept in memory only; loaded when the News tab is shown.
+ * The last week's team news for each followed team, from FotMob (which gathers SI, BBC, talkSPORT,
+ * its own reporters and more) and ESPN, filtered by [NewsFilter] to factual team, player, coach and
+ * transfer news. Kept in memory only; loaded when the News tab is shown.
  */
 object News {
     private const val WEEK = 7 * 24 * 60 * 60 * 1000L
@@ -52,11 +53,16 @@ object News {
         try {
             val since = System.currentTimeMillis() - WEEK
             val all = coroutineScope {
-                teams.flatMap { t ->
-                    listOf(
-                        async(Dispatchers.IO) { runCatching { fotmob(t, since) }.onFailure { Log.w("News", "FotMob ${t.name}", it) }.getOrDefault(emptyList()) },
-                        async(Dispatchers.IO) { runCatching { espn(t, since) }.onFailure { Log.w("News", "ESPN ${t.name}", it) }.getOrDefault(emptyList()) },
-                    )
+                teams.map { t ->
+                    async(Dispatchers.IO) {
+                        val people = NewsFilter.peopleWords(squad(t))
+                        val items = listOf(
+                            async { runCatching { fotmob(t, since) }.onFailure { Log.w("News", "FotMob ${t.name}", it) }.getOrDefault(emptyList()) },
+                            async { runCatching { espn(t, since) }.onFailure { Log.w("News", "ESPN ${t.name}", it) }.getOrDefault(emptyList()) },
+                        ).awaitAll().flatten()
+                        items.filter { NewsFilter.keep(it.title, t.name, people) } +
+                            runCatching { highlights(t, since) }.onFailure { Log.w("News", "highlights ${t.name}", it) }.getOrDefault(emptyList())
+                    }
                 }.awaitAll().flatten()
             }
             // The same story can come from both sources, or be about two followed teams.
@@ -64,6 +70,36 @@ object News {
             lastLoad = System.currentTimeMillis()
         } finally {
             _loading.value = false
+        }
+    }
+
+    private val squads = mutableMapOf<String, List<String>>()   // FotMob team id -> names, for this run of the app
+
+    /** The team's player and coach names; none if unknown (the filter then relies on transfer/news words). */
+    private fun squad(team: Team): List<String> {
+        if (team.fotmobId.isBlank()) return emptyList()
+        synchronized(squads) { squads[team.fotmobId] }?.let { return it }
+        val names = runCatching { FotMob.squad(team.fotmobId) }.onFailure { Log.w("News", "squad ${team.name}", it) }
+            .getOrNull() ?: return emptyList()
+        synchronized(squads) { squads[team.fotmobId] = names }
+        return names
+    }
+
+    private val highlightUrls = mutableMapOf<String, String>()   // FotMob match id -> video, once found
+
+    /** A card per game the team finished in the last week that has an official highlights video. */
+    private fun highlights(team: Team, since: Long): List<NewsItem> {
+        if (team.fotmobId.isBlank()) return emptyList()
+        val now = System.currentTimeMillis()
+        return FotMob.fixtures(team.fotmobId).filter { it.finished && it.startMillis in since..now }.mapNotNull { f ->
+            val url = synchronized(highlightUrls) { highlightUrls[f.id] }
+                ?: runCatching { FotMob.highlights(f.id) }.getOrNull()?.also { synchronized(highlightUrls) { highlightUrls[f.id] = it } }
+                ?: return@mapNotNull null
+            val score = f.score.replace(" - ", "–")
+            // Dated at the end of the game (kickoff + about 2 hours), when the video appears.
+            val site = android.net.Uri.parse(url).host.orEmpty().removePrefix("www.")
+            val source = if ("youtube" in site || "youtu.be" in site) "YouTube" else site
+            NewsItem("Highlights: ${f.home} $score ${f.away}", source, f.startMillis + 2 * 60 * 60 * 1000L, url, team.id)
         }
     }
 

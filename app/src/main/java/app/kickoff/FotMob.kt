@@ -20,7 +20,14 @@ object FotMob {
     private const val BASE = "https://www.fotmob.com/api/data"
     private val json = Json { ignoreUnknownKeys = true }
 
-    data class Fixture(val id: String, val startMillis: Long)
+    data class Fixture(
+        val id: String,
+        val startMillis: Long,
+        val home: String = "",
+        val away: String = "",
+        val score: String = "",        // e.g. "2 - 3" once played
+        val finished: Boolean = false,
+    )
 
     /** FotMob id of the team best matching [name] (men's first team), or null if none was found. */
     fun findTeam(name: String): String? {
@@ -38,7 +45,22 @@ object FotMob {
         get("$BASE/teams?id=$teamId").obj["fixtures"].obj["allFixtures"].obj["fixtures"].arr.mapNotNull { f ->
             val id = f.obj.str("id") ?: return@mapNotNull null
             val time = f.obj["status"].obj.str("utcTime") ?: return@mapNotNull null
-            runCatching { Fixture(id, OffsetDateTime.parse(time).toInstant().toEpochMilli()) }.getOrNull()
+            val status = f.obj["status"].obj
+            runCatching {
+                Fixture(id, OffsetDateTime.parse(time).toInstant().toEpochMilli(),
+                    home = f.obj["home"].obj.str("name").orEmpty(), away = f.obj["away"].obj.str("name").orEmpty(),
+                    score = status.str("scoreStr").orEmpty(), finished = status.str("finished") == "true")
+            }.getOrNull()
+        }
+
+    /** The official highlights video for a finished game (usually YouTube), or null if FotMob has none yet. */
+    fun highlights(matchId: String): String? =
+        get("$BASE/matchDetails?matchId=$matchId").obj["content"].obj["matchFacts"].obj["highlights"].obj.str("url")
+
+    /** Names of the team's current squad, coach included. */
+    fun squad(teamId: String): List<String> =
+        get("$BASE/teams?id=$teamId").obj["squad"].obj["squad"].arr.flatMap { g ->
+            g.obj["members"].arr.mapNotNull { it.obj.str("name") }
         }
 
     /**
