@@ -92,7 +92,6 @@ data class AppState(
     val scoreboardChecked: Set<String> = emptySet(),
     val videoSearches: Map<String, VideoSearch> = emptyMap(),  // cached, as searches use a small daily allowance   // team ids already checked for a game in progress
     val lastRefresh: Long = 0,
-    val highlightWeeks: Int = 1,   // how far back the Highlights feed goes: 1 or 3 weeks
 )
 
 // ESPN's Bolívar color (3c96c4) is darker than the club's light blue.

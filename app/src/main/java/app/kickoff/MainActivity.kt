@@ -484,19 +484,6 @@ private fun HomeScreen(
                             FilterChip(selected = !showHighlights, onClick = { showHighlights = false }, label = { Text("News") })
                         }
                     }
-                    // How far back highlights go; changing it reloads the feed.
-                    if (showHighlights) item(key = "highlight-weeks") {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            listOf(1 to "Last week", 3 to "Last 3 weeks").forEach { (weeks, label) ->
-                                FilterChip(selected = state.highlightWeeks == weeks, label = { Text(label) }, onClick = {
-                                    if (state.highlightWeeks != weeks) {
-                                        Store.update { it.copy(highlightWeeks = weeks) }
-                                        scope.launch { News.load(context, state.teams) }
-                                    }
-                                })
-                            }
-                        }
-                    }
                     if (state.teams.size > 1) item(key = "news-teams") {
                         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             FilterChip(selected = only == null, onClick = { newsTeam = null }, label = { Text("All") })
@@ -515,7 +502,7 @@ private fun HomeScreen(
                     if (shown.isEmpty()) item {
                         Hint(when {
                             newsLoading -> "Loading news…"
-                            showHighlights -> if (state.highlightWeeks == 3) "No highlights from the last 3 weeks." else "No highlights from the last week."
+                            showHighlights -> "No highlights from the last 2 weeks."
                             else -> "No news from the last week."
                         })
                     }
