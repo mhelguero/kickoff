@@ -53,6 +53,23 @@ object YouTube {
         }
     }
 
+    /** The length in seconds of each of these YouTube videos (by id) that YouTube knows; 1 unit per 50 ids. */
+    fun durations(context: Context, ids: List<String>): Map<String, Int> {
+        if (!enabled) return emptyMap()
+        return ids.distinct().chunked(50).flatMap { chunk ->
+            val root = get(context, "https://www.googleapis.com/youtube/v3/videos?part=contentDetails" +
+                "&id=${chunk.joinToString(",")}&key=${BuildConfig.YOUTUBE_API_KEY}")
+            (root as? JsonObject)?.get("items").arr.map { it.obj }.mapNotNull { item ->
+                val id = item.str("id") ?: return@mapNotNull null
+                // ISO 8601, e.g. "PT9M42S"; "P0D" while a video is live.
+                val secs = item["contentDetails"].obj.str("duration")
+                    ?.let { runCatching { java.time.Duration.parse(it).seconds.toInt() }.getOrNull() }
+                    ?.takeIf { it > 0 } ?: return@mapNotNull null
+                id to secs
+            }
+        }.toMap()
+    }
+
     private val HIGHLIGHT = Regex("""\b(highlights?|resumen|melhores momentos)\b""")
     private val FAKE = Regex("""\b(efootball|fifa|pes|fc ?2\d|ea sports|simulation|gameplay|prediction|preview|reaction|reacts?|watch ?along|live)\b""")
     private val GENERIC = setOf("club", "football", "futbol", "calcio", "sport", "sports")

@@ -7,6 +7,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -29,6 +30,7 @@ data class NewsItem(
     val teamId: String,
     val writer: String = "",
     val image: String? = null,         // thumbnail, for highlight videos
+    val durationSecs: Int? = null,     // video length, for highlight videos, when known
 ) {
     /** The link is a video (YouTube), not an article. */
     val isVideo get() = android.net.Uri.parse(url).host.orEmpty().let { "youtube" in it || "youtu.be" in it } || source == "YouTube"
@@ -76,8 +78,8 @@ object News {
             }
             // The same story can come from both sources, or be about two followed teams.
             // A video counts once however it's titled.
-            _items.value = all.distinctBy { youtubeId(it.url) ?: it.title.lowercase().filter(Char::isLetterOrDigit) }
-                .sortedByDescending { it.timeMillis }
+            val unique = all.distinctBy { youtubeId(it.url) ?: it.title.lowercase().filter(Char::isLetterOrDigit) }
+            _items.value = withDurations(context, unique).sortedByDescending { it.timeMillis }
             lastLoad = System.currentTimeMillis()
         } finally {
             _loading.value = false
@@ -94,6 +96,24 @@ object News {
             .getOrNull() ?: return emptyList()
         synchronized(squads) { squads[team.fotmobId] = names }
         return names
+    }
+
+    private val durations = mutableMapOf<String, Int>()   // YouTube video id -> seconds, for this run of the app
+
+    /** Highlight videos with their length, looked up once per video; left without one if YouTube can't say. */
+    private suspend fun withDurations(context: android.content.Context, items: List<NewsItem>): List<NewsItem> {
+        val ids = items.filter { it.isHighlight }.mapNotNull { youtubeId(it.url) }
+        val missing = synchronized(durations) { ids.filter { it !in durations } }
+        if (missing.isNotEmpty()) {
+            val found = withContext(Dispatchers.IO) {
+                runCatching { YouTube.durations(context, missing) }.onFailure { Log.w("News", "durations", it) }.getOrDefault(emptyMap())
+            }
+            synchronized(durations) { durations.putAll(found) }
+        }
+        return items.map { n ->
+            val secs = if (n.isHighlight) youtubeId(n.url)?.let { synchronized(durations) { durations[it] } } else null
+            if (secs != null) n.copy(durationSecs = secs) else n
+        }
     }
 
     private val highlightUrls = mutableMapOf<String, FotMob.Highlight>()   // FotMob match id -> video, once found

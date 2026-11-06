@@ -635,8 +635,11 @@ private fun NewsCard(n: NewsItem, teams: List<Team>) {
                         Text(n.writer, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
                     }
                     Spacer(Modifier.weight(1f))
-                    Text(timeFmt.format(Instant.ofEpochMilli(n.timeMillis).atZone(ZoneId.systemDefault())),
-                        style = MaterialTheme.typography.labelLarge, color = content.copy(alpha = 0.8f))
+                    // Highlights: the video's length ("9:42"); articles (or a video whose length
+                    // isn't known): when it was posted.
+                    val corner = n.durationSecs?.let(::videoLength)
+                        ?: timeFmt.format(Instant.ofEpochMilli(n.timeMillis).atZone(ZoneId.systemDefault()))
+                    Text(corner, style = MaterialTheme.typography.labelLarge, color = content.copy(alpha = 0.8f))
                 }
                 Spacer(Modifier.height(4.dp))
                 Text(n.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
@@ -649,6 +652,14 @@ private fun NewsCard(n: NewsItem, teams: List<Team>) {
             }
         }
     }
+}
+
+/** A video's length: "9:42", or "1:02:05" past an hour. */
+private fun videoLength(secs: Int): String {
+    val h = secs / 3600
+    val m = secs % 3600 / 60
+    val s = secs % 60
+    return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%d:%02d".format(m, s)
 }
 
 /**
