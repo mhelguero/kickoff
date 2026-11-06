@@ -77,7 +77,12 @@ data class Channel(val name: String, val country: String)
 
 /** A YouTube highlights search for a game (FotMob match id): the video found, if any, and when. */
 @Serializable
-data class VideoSearch(val url: String? = null, val image: String? = null, val checkedAt: Long = 0)
+data class VideoSearch(
+    val url: String? = null,
+    val image: String? = null,
+    val checkedAt: Long = 0,
+    val version: Int = 0,          // News.SEARCH_VERSION when searched: older misses are searched again
+)
 
 @Serializable
 data class AppState(

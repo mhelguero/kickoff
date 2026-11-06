@@ -55,12 +55,21 @@ object News {
     var lastLoad = 0L
         private set
 
+    /** A recent game of a followed team with no highlights yet, and why ("nothing matched on YouTube yet"). */
+    data class Missing(val teamId: String, val game: String, val reason: String)
+    private val _missing = MutableStateFlow<List<Missing>>(emptyList())
+    val missing: StateFlow<List<Missing>> get() = _missing
+
+    /** Bumped when the YouTube search gets better, so games it missed before are searched again. */
+    const val SEARCH_VERSION = 2
+
     /** Reloads every team's news, newest first; a source that fails is left out. */
     suspend fun load(context: android.content.Context, teams: List<Team>) {
         if (_loading.value) return
         _loading.value = true
         try {
             val since = System.currentTimeMillis() - WEEK
+            val missing = java.util.Collections.synchronizedList(mutableListOf<Missing>())
             val all = coroutineScope {
                 teams.map { t ->
                     async(Dispatchers.IO) {
@@ -71,7 +80,10 @@ object News {
                         ).awaitAll().flatten()
                         // Highlights cards first: when the feed has the same video, the card (with its
                         // competition) is the one kept.
-                        runCatching { highlights(context, t, since) }.onFailure { Log.w("News", "highlights ${t.name}", it) }.getOrDefault(emptyList()) +
+                        runCatching { highlights(context, t, since, missing) }.onFailure {
+                            Log.w("News", "highlights ${t.name}", it)
+                            missing += Missing(t.id, t.name, "Couldn't get recent games from FotMob (${it.message ?: it.javaClass.simpleName}).")
+                        }.getOrDefault(emptyList()) +
                             items.filter { NewsFilter.keep(it.title, t.name, people, it.isVideo) }
                     }
                 }.awaitAll().flatten()
@@ -80,6 +92,7 @@ object News {
             // A video counts once however it's titled.
             val unique = all.distinctBy { youtubeId(it.url) ?: it.title.lowercase().filter(Char::isLetterOrDigit) }
             _items.value = withDurations(context, unique).sortedByDescending { it.timeMillis }
+            _missing.value = synchronized(missing) { missing.distinctBy { it.game }.toList() }
             lastLoad = System.currentTimeMillis()
         } finally {
             _loading.value = false
@@ -119,16 +132,22 @@ object News {
     private val highlightUrls = mutableMapOf<String, FotMob.Highlight>()   // FotMob match id -> video, once found
 
     /** A card per game the team finished in the last week that has an official highlights video. */
-    private fun highlights(context: android.content.Context, team: Team, since: Long): List<NewsItem> {
-        if (team.fotmobId.isBlank()) return emptyList()
+    private fun highlights(context: android.content.Context, team: Team, since: Long, missing: MutableList<Missing>): List<NewsItem> {
+        if (team.fotmobId.isBlank()) {
+            missing += Missing(team.id, team.name, "Team not found on FotMob yet, so its games can't be checked.")
+            return emptyList()
+        }
         val now = System.currentTimeMillis()
         return FotMob.fixtures(team.fotmobId).filter { it.finished && it.startMillis in since..now }.mapNotNull { f ->
+            val score = f.score.replace(" - ", "–")
             val h = synchronized(highlightUrls) { highlightUrls[f.id] }
                 ?: runCatching { FotMob.highlights(f.id) }.getOrNull()?.also { synchronized(highlightUrls) { highlightUrls[f.id] = it } }
                 ?: youtubeSearch(context, f, now)
-                ?: return@mapNotNull null
+            if (h == null) {
+                missing += Missing(team.id, "${f.home} $score ${f.away}", missingReason(f, now))
+                return@mapNotNull null
+            }
             val url = h.url
-            val score = f.score.replace(" - ", "–")
             // Dated at the end of the game (kickoff + about 2 hours), when the video appears.
             val site = android.net.Uri.parse(url).host.orEmpty().removePrefix("www.")
             val source = if ("youtube" in site || "youtu.be" in site) "YouTube" else site
@@ -146,21 +165,43 @@ object News {
         if (!YouTube.enabled) return null
         val saved = Store.state.value.videoSearches[f.id]
         saved?.url?.let { return FotMob.Highlight(it, saved.image) }
-        val hour = 60 * 60 * 1000L
         // Give the video time to be uploaded (game over about 2 hours after kickoff).
-        if (now < f.startMillis + 2 * hour || now > f.startMillis + 2 * 24 * hour) return null
-        if (saved != null && now - saved.checkedAt < 3 * hour) return null
+        if (now < f.startMillis + 2 * HOUR || now > f.startMillis + SEARCH_DAYS * 24 * HOUR) return null
+        if (saved != null && saved.version >= SEARCH_VERSION && now - saved.checkedAt < 3 * HOUR) return null
         val video = runCatching { YouTube.findHighlights(context, f.home, f.away, f.startMillis) }
             .onFailure { Log.w("News", "YouTube ${f.home} vs ${f.away}", it) }
         // A failed request (no key yet, allowance used up) isn't saved, so it's tried again next time.
+        synchronized(searchErrors) {
+            video.exceptionOrNull()?.let { searchErrors[f.id] = it.message ?: it.javaClass.simpleName } ?: searchErrors.remove(f.id)
+        }
         if (video.isFailure) return null
         val v = video.getOrNull()
         Store.update { s ->
             // Searches older than 10 days are for games no longer shown.
-            val kept = s.videoSearches.filterValues { now - it.checkedAt < 10 * 24 * hour }
-            s.copy(videoSearches = kept + (f.id to VideoSearch(v?.url, v?.image, now)))
+            val kept = s.videoSearches.filterValues { now - it.checkedAt < 10 * 24 * HOUR }
+            s.copy(videoSearches = kept + (f.id to VideoSearch(v?.url, v?.image, now, SEARCH_VERSION)))
         }
         return v?.let { FotMob.Highlight(it.url, it.image) }
+    }
+
+    private const val HOUR = 60 * 60 * 1000L
+    private const val SEARCH_DAYS = 2
+    private val searchErrors = mutableMapOf<String, String>()   // FotMob match id -> last YouTube error, this run
+
+    /** Why a finished game has no highlights card, for the Highlights tab. */
+    private fun missingReason(f: FotMob.Fixture, now: Long): String {
+        val time = java.time.format.DateTimeFormatter.ofPattern("EEE h:mm a")
+        fun at(ms: Long) = time.format(java.time.Instant.ofEpochMilli(ms).atZone(java.time.ZoneId.systemDefault()))
+        val saved = Store.state.value.videoSearches[f.id]
+        val error = synchronized(searchErrors) { searchErrors[f.id] }
+        return when {
+            !YouTube.enabled -> "No FotMob video, and this build has no YouTube key to search with."
+            error != null -> "No FotMob video; the YouTube search failed ($error). Tried again on the next refresh."
+            now < f.startMillis + 2 * HOUR -> "Searching YouTube from ${at(f.startMillis + 2 * HOUR)}."
+            saved == null -> "No FotMob video; YouTube not searched yet."
+            now > f.startMillis + SEARCH_DAYS * 24 * HOUR -> "No video found on YouTube in the $SEARCH_DAYS days after the game."
+            else -> "No matching video on YouTube yet (searched ${at(saved.checkedAt)}; again after ${at(saved.checkedAt + 3 * HOUR)})."
+        }
     }
 
     /** The video id in a YouTube link ("watch?v=ID" or "youtu.be/ID"). */

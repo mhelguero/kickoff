@@ -289,6 +289,7 @@ private fun HomeScreen(
     var showHighlights by rememberSaveable { mutableStateOf(true) }
     val news by News.items.collectAsStateWithLifecycle()
     val newsLoading by News.loading.collectAsStateWithLifecycle()
+    val missingHighlights by News.missing.collectAsStateWithLifecycle()
     val teamKey = state.teams.map { "${it.id}:${it.fotmobId}" }
     var newsFor by remember { mutableStateOf<List<String>?>(null) }
     LaunchedEffect(tab, teamKey) {
@@ -461,6 +462,16 @@ private fun HomeScreen(
                             showHighlights -> "No highlights from the last week."
                             else -> "No news from the last week."
                         })
+                    }
+                    // Recent games without highlights, and why (no video yet, search failed, ...).
+                    if (showHighlights) {
+                        missingHighlights.filter { n -> state.teams.any { it.id == n.teamId } && (only == null || n.teamId == only) }
+                            .forEachIndexed { i, n ->
+                                item(key = "missing-$i") {
+                                    Text("${n.game}: ${n.reason}", style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
                     }
                     shown.groupBy { Instant.ofEpochMilli(it.timeMillis).atZone(ZoneId.systemDefault()).toLocalDate() }
                         .forEach { (day, dayNews) ->

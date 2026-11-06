@@ -151,9 +151,11 @@ object Tracker {
      */
     private fun findBolivianChannels(now: Long) {
         val s0 = Store.state.value
+        // Bolivian competitions, or any game of a followed Bolivian team (its page lists cup games too).
+        val bolivianTeams = s0.teams.filter { "bolivia" in it.league.lowercase() }.map { it.id }.toSet()
         val games = s0.matches.values.filter { m ->
-            m.leagueSlug.startsWith("bol.") && m.state != "post" && m.dateMillis <= now + 14 * 24 * HOUR &&
-                m.tv[Streaming.COUNTRY].isNullOrEmpty()
+            (m.leagueSlug.startsWith("bol.") || m.teamIds.any { it in bolivianTeams }) &&
+                m.state != "post" && m.dateMillis <= now + 14 * 24 * HOUR && m.tv[Streaming.COUNTRY].isNullOrEmpty()
         }
         if (games.isEmpty()) return
         val pages = mutableMapOf<String, List<BoliviaTv.Listing>>()   // followed team id -> its listings
@@ -168,8 +170,8 @@ object Tracker {
                 // The page is this team's, and a team plays once a day: the date settles it, the
                 // names (which can differ: "GV San José") only pick between rows if ever needed.
                 val sameDay = list.filter { it.date == date }
-                sameDay.firstOrNull { BoliviaTv.sameTeam(it.home, m.home) && BoliviaTv.sameTeam(it.away, m.away) }
-                    ?: sameDay.singleOrNull()
+                fun names(l: BoliviaTv.Listing, team: String) = l.teams.any { BoliviaTv.sameTeam(it, team) }
+                sameDay.firstOrNull { names(it, m.home) && names(it, m.away) } ?: sameDay.firstOrNull()
             } ?: continue
             found[m.id] = listing.channels
         }
