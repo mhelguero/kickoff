@@ -3,6 +3,7 @@ package app.kickoff
 import android.content.Context
 import android.graphics.BitmapFactory
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import java.io.File
 import java.net.HttpURLConnection
@@ -26,6 +27,28 @@ object Logos {
         }
         synchronized(memory) { memory[url] = image }
         return image
+    }
+
+    private val tones = mutableMapOf<String, Float>()
+
+    /**
+     * How light the image's visible pixels are on average, 0 (black) to 1 (white), ignoring its
+     * transparent background: e.g. Juventus' crest is all black, invisible on a black card.
+     */
+    fun tone(url: String, image: ImageBitmap): Float {
+        synchronized(tones) { tones[url] }?.let { return it }
+        val small = android.graphics.Bitmap.createScaledBitmap(image.asAndroidBitmap(), 24, 24, true)
+        var sum = 0.0
+        var count = 0
+        for (y in 0 until small.height) for (x in 0 until small.width) {
+            val px = small.getPixel(x, y)
+            if (android.graphics.Color.alpha(px) < 128) continue
+            sum += androidx.core.graphics.ColorUtils.calculateLuminance(px)
+            count++
+        }
+        val tone = if (count == 0) 0.5f else (sum / count).toFloat()
+        synchronized(tones) { tones[url] = tone }
+        return tone
     }
 
     private fun download(url: String): ByteArray {

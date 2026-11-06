@@ -49,6 +49,7 @@ import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -650,7 +651,7 @@ private fun NewsCard(n: NewsItem, teams: List<Team>) {
         n.image?.let { Thumbnail(it) }
         Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             // Which team the story is about.
-            TeamCrest(n.teamId)
+            TeamCrest(n.teamId, background)
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     // The app a tap opens (e.g. the browser, or ESPN or FotMob for their own links).
@@ -713,16 +714,28 @@ private fun Thumbnail(url: String) {
     }
 }
 
-/** A team's crest from ESPN (whose team ids the app uses), with room after it; nothing if it can't load. */
+/**
+ * A team's crest from ESPN (whose team ids the app uses), with room after it; nothing if it can't
+ * load. A crest that would blend into the card ([background]: the team color, or the default card
+ * color) sits on a contrasting circle, e.g. Juventus' black crest on its black card.
+ */
 @Composable
-private fun TeamCrest(teamId: String) {
+private fun TeamCrest(teamId: String, background: Color?) {
     val context = LocalContext.current
     val url = "https://a.espncdn.com/i/teamlogos/soccer/500/$teamId.png"
-    val crest by produceState<ImageBitmap?>(null, url) {
-        value = withContext(Dispatchers.IO) { Logos.load(context, url) }
+    val crest by produceState<Pair<ImageBitmap, Float>?>(null, url) {
+        value = withContext(Dispatchers.IO) { Logos.load(context, url)?.let { it to Logos.tone(url, it) } }
     }
-    crest?.let {
-        Image(it, contentDescription = null, modifier = Modifier.size(40.dp), contentScale = ContentScale.Fit)
+    val cardTone = (background ?: CardDefaults.cardColors().containerColor).luminance()
+    crest?.let { (image, tone) ->
+        if (kotlin.math.abs(tone - cardTone) < 0.2f) {
+            // Light circle behind a dark crest, dark behind a light one.
+            val circle = if (tone < 0.5f) Color.White else Color.Black
+            Image(image, contentDescription = null, contentScale = ContentScale.Fit,
+                modifier = Modifier.size(40.dp).background(circle, CircleShape).padding(5.dp))
+        } else {
+            Image(image, contentDescription = null, modifier = Modifier.size(40.dp), contentScale = ContentScale.Fit)
+        }
         Spacer(Modifier.width(12.dp))
     }
 }
