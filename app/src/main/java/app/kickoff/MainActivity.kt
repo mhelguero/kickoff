@@ -23,6 +23,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.aspectRatio
@@ -57,6 +58,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -277,6 +279,8 @@ private fun HomeScreen(
 
     // Games or News tab. News loads when its tab is shown (again after 15 minutes or a team change).
     var tab by rememberSaveable { mutableIntStateOf(0) }
+    // News for one team only (its ESPN id), or every team when null.
+    var newsTeam by rememberSaveable { mutableStateOf<String?>(null) }
     val news by News.items.collectAsStateWithLifecycle()
     val newsLoading by News.loading.collectAsStateWithLifecycle()
     val teamKey = state.teams.map { "${it.id}:${it.fotmobId}" }
@@ -398,8 +402,21 @@ private fun HomeScreen(
                     }
                 }
                 if (tab == 1) {
+                    // A removed team's filter falls back to all teams.
+                    val only = newsTeam?.takeIf { id -> state.teams.any { it.id == id } }
+                    if (state.teams.size > 1) item(key = "news-teams") {
+                        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilterChip(selected = only == null, onClick = { newsTeam = null }, label = { Text("All") })
+                            state.teams.forEach { team ->
+                                // Tapping the selected team again shows all teams.
+                                FilterChip(selected = only == team.id,
+                                    onClick = { newsTeam = if (only == team.id) null else team.id },
+                                    label = { Text(team.name) })
+                            }
+                        }
+                    }
                     // A removed team's headlines go right away, before the next load.
-                    val shown = news.filter { n -> state.teams.any { it.id == n.teamId } }
+                    val shown = news.filter { n -> state.teams.any { it.id == n.teamId } && (only == null || n.teamId == only) }
                     if (shown.isEmpty()) item { Hint(if (newsLoading) "Loading news…" else "No news from the last week.") }
                     shown.groupBy { Instant.ofEpochMilli(it.timeMillis).atZone(ZoneId.systemDefault()).toLocalDate() }
                         .forEach { (day, dayNews) ->
