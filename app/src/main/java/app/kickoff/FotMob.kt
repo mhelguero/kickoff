@@ -30,16 +30,29 @@ object FotMob {
         val tournament: String = "",   // e.g. "LaLiga", "Champions League"
     )
 
-    /** FotMob id of the team best matching [name] (men's first team), or null if none was found. */
-    fun findTeam(name: String): String? {
-        val root = get("$BASE/search/suggest?term=${URLEncoder.encode(name, "UTF-8")}&lang=en")
-        val teams = root.arr.flatMap { it.obj["suggestions"].arr }.map { it.obj }
-            .filter { it.str("type") == "team" }
-            // "(W)" is the women's team; FotMob's own ranking puts the best match first.
-            .filter { !it.str("name").orEmpty().endsWith("(W)") }
-        val pick = teams.firstOrNull { norm(it.str("name")) == norm(name) } ?: teams.firstOrNull()
-        return pick?.str("id")
+    /**
+     * FotMob teams that may be [name] (men's teams), likeliest first: the full name, then shorter
+     * forms, since FotMob's names can differ from ESPN's ("Pumas UNAM" may be just "Pumas").
+     */
+    fun findTeams(name: String): List<String> {
+        val words = name.split(Regex("\\s+")).filter { it.isNotBlank() }
+        val queries = listOf(name, words.filter { norm(it) !in GENERIC }.joinToString(" "),
+            words.maxByOrNull { if (norm(it) in GENERIC) 0 else it.length }.orEmpty())
+            .map { it.trim() }.filter { it.length >= 3 }.distinct()
+        val ids = mutableListOf<String>()
+        for (q in queries) {
+            val root = get("$BASE/search/suggest?term=${URLEncoder.encode(q, "UTF-8")}&lang=en")
+            val teams = root.arr.flatMap { it.obj["suggestions"].arr }.map { it.obj }
+                .filter { it.str("type") == "team" }
+                // "(W)" is the women's team; FotMob's own ranking puts the best match first.
+                .filter { !it.str("name").orEmpty().endsWith("(W)") }
+            val exact = teams.filter { norm(it.str("name")) == norm(name) }
+            (exact + teams).mapNotNullTo(ids) { it.str("id") }
+        }
+        return ids.distinct()
     }
+
+    private val GENERIC = setOf("fc", "cf", "sc", "cd", "club", "deportivo", "atletico", "real", "united", "city")
 
     /** The team's games this season, past, live and upcoming. */
     fun fixtures(teamId: String): List<Fixture> =

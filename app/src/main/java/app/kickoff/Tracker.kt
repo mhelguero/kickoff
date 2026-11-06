@@ -106,15 +106,31 @@ object Tracker {
             Log.w(TAG, "FotMob $step", e)
         }
 
-        for (team in Store.state.value.teams.filter { it.fotmobId.isBlank() }) {
-            val id = runCatching { FotMob.findTeam(team.name) }.onFailure(failed("team search")).getOrNull() ?: continue
+        val fixtures = mutableMapOf<String, List<FotMob.Fixture>>()   // ESPN team id to its FotMob games
+        for (team in Store.state.value.teams) {
+            // The team's ESPN games: a FotMob team is the right one if its games are at the same times.
+            val games = Store.state.value.matches.values.filter { team.id in it.teamIds }
+            fun lineUp(list: List<FotMob.Fixture>) = games.isEmpty() ||
+                games.any { m -> list.any { abs(it.startMillis - m.dateMillis) <= 3 * HOUR } }
+            if (team.fotmobId.isNotBlank()) {
+                val list = runCatching { FotMob.fixtures(team.fotmobId) }.onFailure(failed("games")).getOrNull() ?: continue
+                if (lineUp(list)) { fixtures[team.id] = list; continue }
+                Log.w(TAG, "FotMob team ${team.fotmobId} isn't ${team.name}: searching again")
+            }
+            // Search: the first candidate whose games line up (FotMob's names can differ from ESPN's).
+            val candidates = runCatching { FotMob.findTeams(team.name) }.onFailure(failed("team search")).getOrNull() ?: continue
+            var picked: Pair<String, List<FotMob.Fixture>>? = null
+            for (id in candidates.take(4)) {
+                val list = runCatching { FotMob.fixtures(id) }.onFailure(failed("games")).getOrNull() ?: continue
+                if (lineUp(list)) { picked = id to list; break }
+            }
+            // None found: forget a wrong pick, so the next refresh searches again.
+            val id = picked?.first ?: ""
+            if (id.isEmpty() && team.fotmobId.isBlank()) continue
+            picked?.let { fixtures[team.id] = it.second }
             Store.update { s -> s.copy(teams = s.teams.map { if (it.id == team.id) it.copy(fotmobId = id) else it }) }
         }
         val s0 = Store.state.value
-        val fixtures = mutableMapOf<String, List<FotMob.Fixture>>()   // ESPN team id to its FotMob games
-        for (team in s0.teams.filter { it.fotmobId.isNotBlank() }) {
-            runCatching { FotMob.fixtures(team.fotmobId) }.onSuccess { fixtures[team.id] = it }.onFailure(failed("games"))
-        }
         val teamsFound = "${s0.teams.count { it.fotmobId.isNotBlank() }}/${s0.teams.size} teams"
         // Refused outright (e.g. HTTP 403): don't send a request per game that will be refused too.
         if (fixtures.isEmpty() && problem.isNotEmpty()) {
