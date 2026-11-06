@@ -294,7 +294,7 @@ private fun HomeScreen(
     LaunchedEffect(tab, teamKey) {
         if (tab == 1 && (newsFor != teamKey || System.currentTimeMillis() - News.lastLoad > 15 * 60_000L)) {
             newsFor = teamKey
-            News.load(state.teams)
+            News.load(context, state.teams)
         }
     }
 
@@ -358,7 +358,7 @@ private fun HomeScreen(
             isRefreshing = refreshing || (tab == 1 && newsLoading),
             onRefresh = {
                 onRefresh()
-                if (tab == 1) scope.launch { News.load(state.teams) }
+                if (tab == 1) scope.launch { News.load(context, state.teams) }
                 scope.launch { checkUpdate() }
             },
             modifier = Modifier.fillMaxSize().padding(pad),

@@ -39,6 +39,7 @@ jobs:
       - name: Build
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
         run: gradle assembleRelease -PversionCode=${{ github.run_number }}
 
       - run: cp app/build/outputs/apk/release/app-release.apk Kickoff.apk

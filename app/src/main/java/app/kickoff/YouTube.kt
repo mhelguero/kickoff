@@ -1,0 +1,95 @@
+package app.kickoff
+
+import android.content.Context
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import java.net.HttpURLConnection
+import java.net.URL
+import java.security.MessageDigest
+import java.text.Normalizer
+import java.time.Instant
+
+/**
+ * Finds a game's highlights on YouTube when FotMob has none (FotMob only links them for some
+ * competitions). Uses the YouTube Data API with the key from the build (repo secret
+ * YOUTUBE_API_KEY), which is locked to this app, so requests say which app and signature they
+ * come from. Each search costs a share of a small free daily allowance: callers cache results.
+ */
+object YouTube {
+    private val json = Json { ignoreUnknownKeys = true }
+
+    data class Video(val url: String, val image: String?)
+
+    val enabled get() = BuildConfig.YOUTUBE_API_KEY.isNotBlank()
+
+    /** The best highlights video of [home] vs [away] uploaded after [kickoffMillis], or null. */
+    fun findHighlights(context: Context, home: String, away: String, kickoffMillis: Long): Video? {
+        if (!enabled) return null
+        val q = Uri.encode("$home vs $away highlights")
+        val after = Instant.ofEpochMilli(kickoffMillis).toString()
+        val root = get(context, "https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=10" +
+            "&order=relevance&q=$q&publishedAfter=$after&key=${BuildConfig.YOUTUBE_API_KEY}")
+        val homeWords = words(home)
+        val awayWords = words(away)
+        return (root as? JsonObject)?.get("items").arr.map { it.obj }.firstNotNullOfOrNull { item ->
+            val id = item["id"].obj.str("videoId") ?: return@firstNotNullOfOrNull null
+            val snippet = item["snippet"].obj
+            val title = norm(snippet.str("title").orEmpty())
+            val titleWords = Regex("[a-z0-9]+").findAll(title).map { it.value }.toSet()
+            // Both teams named, called highlights, and not a video game or a reaction video.
+            val ok = HIGHLIGHT.containsMatchIn(title) && !FAKE.containsMatchIn(title) &&
+                homeWords.any { it in titleWords } && awayWords.any { it in titleWords }
+            if (!ok) return@firstNotNullOfOrNull null
+            val thumbs = snippet["thumbnails"].obj
+            val image = listOf("maxres", "high", "medium", "default").firstNotNullOfOrNull { thumbs[it].obj.str("url") }
+            Video("https://www.youtube.com/watch?v=$id", image)
+        }
+    }
+
+    private val HIGHLIGHT = Regex("""\b(highlights?|resumen|melhores momentos)\b""")
+    private val FAKE = Regex("""\b(efootball|fifa|pes|fc ?2\d|ea sports|simulation|gameplay|prediction|preview|reaction|reacts?|watch ?along|live)\b""")
+    private val GENERIC = setOf("club", "football", "futbol", "calcio", "sport", "sports")
+
+    /** Distinctive words of a team name ("Houston Dynamo FC" -> houston, dynamo). */
+    private fun words(team: String) = Regex("[a-z0-9]+").findAll(norm(team)).map { it.value }
+        .filter { it.length >= 4 && it !in GENERIC }.toSet()
+
+    private fun norm(s: String) = Normalizer.normalize(s, Normalizer.Form.NFD).replace(Regex("""\p{Mn}+"""), "").lowercase()
+
+    /** SHA-1 of the app's signing certificate, as the key's Android-app restriction expects. */
+    private fun certSha1(context: Context): String {
+        val pm = context.packageManager
+        val sig = if (Build.VERSION.SDK_INT >= 28) {
+            pm.getPackageInfo(context.packageName, PackageManager.GET_SIGNING_CERTIFICATES).signingInfo?.apkContentsSigners?.firstOrNull()
+        } else {
+            @Suppress("DEPRECATION")
+            pm.getPackageInfo(context.packageName, PackageManager.GET_SIGNATURES).signatures?.firstOrNull()
+        } ?: return ""
+        return MessageDigest.getInstance("SHA-1").digest(sig.toByteArray()).joinToString("") { "%02X".format(it) }
+    }
+
+    private fun get(context: Context, url: String): JsonElement {
+        val conn = URL(url).openConnection() as HttpURLConnection
+        conn.connectTimeout = 15_000
+        conn.readTimeout = 15_000
+        conn.setRequestProperty("X-Android-Package", context.packageName)
+        conn.setRequestProperty("X-Android-Cert", certSha1(context))
+        try {
+            if (conn.responseCode !in 200..299) error("YouTube HTTP ${conn.responseCode}")
+            return json.parseToJsonElement(conn.inputStream.bufferedReader().readText())
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    private val JsonElement?.obj get() = this as? JsonObject ?: JsonObject(emptyMap())
+    private val JsonElement?.arr get() = this as? JsonArray ?: JsonArray(emptyList())
+    private fun JsonObject.str(key: String) = (this[key] as? JsonPrimitive)?.contentOrNull
+}

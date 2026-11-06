@@ -16,6 +16,8 @@ android {
         // CI passes the GitHub run number so every build installs as an update.
         versionCode = (findProperty("versionCode") as String?)?.toInt() ?: 1
         versionName = "1.$versionCode"
+        // For finding game highlights on YouTube; CI passes the repo secret, local builds go without.
+        buildConfigField("String", "YOUTUBE_API_KEY", "\"${System.getenv("YOUTUBE_API_KEY").orEmpty()}\"")
     }
 
     // The same key must sign every build, or Android refuses to install it over the previous one.
@@ -49,6 +51,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 

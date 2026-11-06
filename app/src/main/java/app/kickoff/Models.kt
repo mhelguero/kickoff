@@ -75,12 +75,17 @@ data class AlertState(
 /** A TV channel or streaming service and the country code it's shown in (e.g. "ViX", "US"). */
 data class Channel(val name: String, val country: String)
 
+/** A YouTube highlights search for a game (FotMob match id): the video found, if any, and when. */
+@Serializable
+data class VideoSearch(val url: String? = null, val image: String? = null, val checkedAt: Long = 0)
+
 @Serializable
 data class AppState(
     val teams: List<Team> = DEFAULT_TEAMS,
     val matches: Map<String, Match> = emptyMap(),
     val alerts: Map<String, AlertState> = emptyMap(),
-    val scoreboardChecked: Set<String> = emptySet(),   // team ids already checked for a game in progress
+    val scoreboardChecked: Set<String> = emptySet(),
+    val videoSearches: Map<String, VideoSearch> = emptyMap(),  // cached, as searches use a small daily allowance   // team ids already checked for a game in progress
     val lastRefresh: Long = 0,
 )
 
