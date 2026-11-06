@@ -41,6 +41,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -91,6 +93,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -297,6 +300,9 @@ private fun HomeScreen(
 
     // App updates from GitHub, checked each time the app comes to the screen and on swipe-to-refresh.
     var update by remember { mutableStateOf<Updater.Release?>(null) }
+    // When an update is found, scroll up so its banner (the list's first item) is in view.
+    val listState = rememberLazyListState()
+    LaunchedEffect(update) { if (update != null) listState.animateScrollToItem(0) }
     var updating by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     suspend fun checkUpdate() {
@@ -358,7 +364,20 @@ private fun HomeScreen(
             modifier = Modifier.fillMaxSize().padding(pad),
         ) {
             LazyColumn(
-                Modifier.fillMaxSize(),
+                Modifier.fillMaxSize().pointerInput(Unit) {
+                    // Swipe left for News, right for Games (vertical scrolling is unaffected).
+                    val distance = 80.dp.toPx()
+                    var dragged = 0f
+                    detectHorizontalDragGestures(
+                        onDragStart = { dragged = 0f },
+                        onHorizontalDrag = { _, dx -> dragged += dx },
+                        onDragEnd = {
+                            if (dragged < -distance) tab = 1
+                            else if (dragged > distance) tab = 0
+                        },
+                    )
+                },
+                state = listState,
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
