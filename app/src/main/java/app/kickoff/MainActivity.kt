@@ -368,7 +368,7 @@ private fun HomeScreen(
         ) {
             LazyColumn(
                 Modifier.fillMaxSize().pointerInput(Unit) {
-                    // Swipe left for News, right for Games (vertical scrolling is unaffected).
+                    // Swipe left for Feed, right for Games (vertical scrolling is unaffected).
                     val distance = 80.dp.toPx()
                     var dragged = 0f
                     detectHorizontalDragGestures(
@@ -427,7 +427,7 @@ private fun HomeScreen(
                 item(key = "tabs") {
                     TabRow(selectedTabIndex = tab) {
                         Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("Games", fontWeight = FontWeight.Bold) })
-                        Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("News", fontWeight = FontWeight.Bold) })
+                        Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("Feed", fontWeight = FontWeight.Bold) })
                     }
                 }
                 if (tab == 1) {

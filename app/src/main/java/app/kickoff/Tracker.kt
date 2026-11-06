@@ -9,7 +9,9 @@ import android.util.Log
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
@@ -218,13 +220,26 @@ object Tracker {
         // same time can't be overwritten or cause a duplicate alert. A muted game's phases are still
         // recorded, so turning alerts back on doesn't send old ones.
         var shouldNotify = false
+        var justEnded = false
         Store.update { st ->
             val alert = st.alerts[match.id] ?: AlertState()
             if (phase <= alert.phase) return@update st
             shouldNotify = !stale && !alert.muted
+            justEnded = phase == Phase.ENDED && !stale
             st.copy(alerts = st.alerts + (match.id to alert.copy(phase = phase, notified = alert.notified || shouldNotify)))
         }
         if (shouldNotify) Notifier.gameAlert(context, match, phase)
+        // Look for the game's highlights once they've had time to go up.
+        if (justEnded) scheduleFeedLoad(context, match.id, 30 * MIN)
+    }
+
+    /** Load the Feed (news, highlights, YouTube searches) in the background after [delayMs]. */
+    fun scheduleFeedLoad(context: Context, tag: String, delayMs: Long) {
+        val req = OneTimeWorkRequestBuilder<FeedWorker>()
+            .setInitialDelay(delayMs, TimeUnit.MILLISECONDS)
+            .setConstraints(Constraints(requiredNetworkType = NetworkType.CONNECTED))
+            .build()
+        WorkManager.getInstance(context).enqueueUniqueWork("feed-$tag", ExistingWorkPolicy.REPLACE, req)
     }
 
     // ---- scheduling ----
@@ -280,6 +295,17 @@ class RefreshWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ct
     override suspend fun doWork(): Result {
         Store.init(applicationContext)
         Tracker.refresh(applicationContext)
+        // Keep highlights current too (YouTube searches are saved, so the Feed shows them at once).
+        runCatching { News.load(applicationContext, Store.state.value.teams) }
+        return Result.success()
+    }
+}
+
+/** Loads the Feed in the background, e.g. half an hour after a followed team's game ends. */
+class FeedWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
+    override suspend fun doWork(): Result {
+        Store.init(applicationContext)
+        runCatching { News.load(applicationContext, Store.state.value.teams) }
         return Result.success()
     }
 }
