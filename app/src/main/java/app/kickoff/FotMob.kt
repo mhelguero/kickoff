@@ -27,6 +27,7 @@ object FotMob {
         val away: String = "",
         val score: String = "",        // e.g. "2 - 3" once played
         val finished: Boolean = false,
+        val tournament: String = "",   // e.g. "LaLiga", "Champions League"
     )
 
     /** FotMob id of the team best matching [name] (men's first team), or null if none was found. */
@@ -49,7 +50,8 @@ object FotMob {
             runCatching {
                 Fixture(id, OffsetDateTime.parse(time).toInstant().toEpochMilli(),
                     home = f.obj["home"].obj.str("name").orEmpty(), away = f.obj["away"].obj.str("name").orEmpty(),
-                    score = status.str("scoreStr").orEmpty(), finished = status.str("finished") == "true")
+                    score = status.str("scoreStr").orEmpty(), finished = status.str("finished") == "true",
+                    tournament = f.obj["tournament"].obj.str("name").orEmpty())
             }.getOrNull()
         }
 

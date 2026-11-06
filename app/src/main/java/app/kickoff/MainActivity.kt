@@ -282,7 +282,8 @@ private fun HomeScreen(
     var tab by rememberSaveable { mutableIntStateOf(0) }
     // News for one team only (its ESPN id), or every team when null.
     var newsTeam by rememberSaveable { mutableStateOf<String?>(null) }
-    var highlightsOnly by rememberSaveable { mutableStateOf(false) }
+    // Highlights (videos) or News (articles); highlights first.
+    var showHighlights by rememberSaveable { mutableStateOf(true) }
     val news by News.items.collectAsStateWithLifecycle()
     val newsLoading by News.loading.collectAsStateWithLifecycle()
     val teamKey = state.teams.map { "${it.id}:${it.fotmobId}" }
@@ -410,10 +411,12 @@ private fun HomeScreen(
                 if (tab == 1) {
                     // A removed team's filter falls back to all teams.
                     val only = newsTeam?.takeIf { id -> state.teams.any { it.id == id } }
-                    // Highlights on its own row; it combines with the team choice below it.
-                    item(key = "news-highlights") {
-                        FilterChip(selected = highlightsOnly, onClick = { highlightsOnly = !highlightsOnly },
-                            label = { Text("Highlights") })
+                    // Highlights or News on their own row; combines with the team choice below it.
+                    item(key = "news-kind") {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilterChip(selected = showHighlights, onClick = { showHighlights = true }, label = { Text("Highlights") })
+                            FilterChip(selected = !showHighlights, onClick = { showHighlights = false }, label = { Text("News") })
+                        }
                     }
                     if (state.teams.size > 1) item(key = "news-teams") {
                         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -428,12 +431,12 @@ private fun HomeScreen(
                     }
                     // A removed team's headlines go right away, before the next load.
                     val shown = news.filter { n ->
-                        state.teams.any { it.id == n.teamId } && (only == null || n.teamId == only) && (!highlightsOnly || n.isHighlight)
+                        state.teams.any { it.id == n.teamId } && (only == null || n.teamId == only) && n.isHighlight == showHighlights
                     }
                     if (shown.isEmpty()) item {
                         Hint(when {
                             newsLoading -> "Loading news…"
-                            highlightsOnly -> "No highlights from the last week."
+                            showHighlights -> "No highlights from the last week."
                             else -> "No news from the last week."
                         })
                     }

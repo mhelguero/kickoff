@@ -107,8 +107,9 @@ object News {
             // Dated at the end of the game (kickoff + about 2 hours), when the video appears.
             val site = android.net.Uri.parse(url).host.orEmpty().removePrefix("www.")
             val source = if ("youtube" in site || "youtu.be" in site) "YouTube" else site
+            // The competition goes where an article's writer would: "Champions League • YouTube".
             NewsItem("Highlights: ${f.home} $score ${f.away}", source, f.startMillis + 2 * 60 * 60 * 1000L, url, team.id,
-                image = h.image ?: youtubeId(url)?.let { "https://i.ytimg.com/vi/$it/hqdefault.jpg" })
+                writer = f.tournament, image = h.image ?: youtubeId(url)?.let { "https://i.ytimg.com/vi/$it/hqdefault.jpg" })
         }
     }
 
