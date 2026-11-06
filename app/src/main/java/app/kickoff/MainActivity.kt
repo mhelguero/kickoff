@@ -588,7 +588,7 @@ private fun GameCard(m: Match, teams: List<Team>, muted: Boolean? = null, onClic
         Column(Modifier.padding(20.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 // The followed team's crest (the one whose color the card has), then the competition.
-                teams.firstOrNull { it.id in m.teamIds }?.let { TeamCrest(it.id, background, size = 32.dp, gap = 10.dp) }
+                teams.firstOrNull { it.id in m.teamIds }?.let { TeamCrest(it.id, background, size = 40.dp, gap = 12.dp) }
                 Text(m.league, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold,
                     modifier = Modifier.weight(1f))
                 // Just the minute ("63'") or "HT": the Live section already says it's live.
