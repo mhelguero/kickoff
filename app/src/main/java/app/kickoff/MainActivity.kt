@@ -329,7 +329,7 @@ private fun HomeScreen(
                 checkUpdate()
                 awaitCancellation()
             } finally {
-                // Left the screen: a new version installs by itself a minute later (Android 12+).
+                // Left the screen: a new version installs by itself moments later (Android 12+).
                 Updater.onScreen = false
                 if (update != null) Updater.scheduleAutoUpdate(context)
             }
@@ -420,8 +420,13 @@ private fun HomeScreen(
                     item(key = "update") {
                         Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
                             Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Text("Kickoff ${release.versionName} is available", fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.weight(1f))
+                                Column(Modifier.weight(1f)) {
+                                    Text("Kickoff ${release.versionName} is available", fontWeight = FontWeight.Bold)
+                                    // Whether it will install by itself once the app is closed.
+                                    val auto = remember { Updater.canAutoUpdate(context) }
+                                    Text(if (auto) "Installs by itself when you leave the app" else "Tap Update to install",
+                                        style = MaterialTheme.typography.bodySmall)
+                                }
                                 if (updating) CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
                                 else Button(onClick = { installUpdate(release) }) { Text("Update") }
                             }

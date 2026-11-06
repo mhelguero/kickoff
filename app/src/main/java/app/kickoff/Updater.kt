@@ -123,20 +123,39 @@ object Updater {
      * Update button. Slow: call off the main thread.
      */
     fun autoUpdate(context: Context) {
-        if (Build.VERSION.SDK_INT < 31 || !canInstall(context)) return
+        if (!canAutoUpdate(context)) return
         val release = checkForUpdate(context) ?: return
         Log.i("Updater", "installing ${release.versionName} in the background")
         install(context, download(context, release), background = true)
     }
 
-    /** Check for (and install) an update soon, once the app has left the screen. */
+    /** Check for (and install) an update right after the app has left the screen. */
     fun scheduleAutoUpdate(context: Context) {
         val req = androidx.work.OneTimeWorkRequestBuilder<UpdateWorker>()
-            .setInitialDelay(1, java.util.concurrent.TimeUnit.MINUTES)
+            .setInitialDelay(15, java.util.concurrent.TimeUnit.SECONDS)
             .setConstraints(androidx.work.Constraints(requiredNetworkType = androidx.work.NetworkType.CONNECTED))
             .build()
         androidx.work.WorkManager.getInstance(context)
             .enqueueUniqueWork("auto-update", androidx.work.ExistingWorkPolicy.REPLACE, req)
+    }
+
+    /**
+     * Can updates install by themselves here? Android 12+ allows it once Kickoff installed itself
+     * (it is its own "installer of record"); a copy installed from the browser can't yet.
+     */
+    fun canAutoUpdate(context: Context): Boolean {
+        if (Build.VERSION.SDK_INT < 31 || !canInstall(context)) return false
+        val installer = runCatching { context.packageManager.getInstallSourceInfo(context.packageName).installingPackageName }.getOrNull()
+        return installer == context.packageName
+    }
+
+    /** Checks for (and installs) updates every hour in the background: one small GitHub request. */
+    fun schedulePeriodicCheck(context: Context) {
+        val req = androidx.work.PeriodicWorkRequestBuilder<UpdateWorker>(1, java.util.concurrent.TimeUnit.HOURS)
+            .setConstraints(androidx.work.Constraints(requiredNetworkType = androidx.work.NetworkType.CONNECTED))
+            .build()
+        androidx.work.WorkManager.getInstance(context)
+            .enqueueUniquePeriodicWork("update-check", androidx.work.ExistingPeriodicWorkPolicy.KEEP, req)
     }
 
     /** True while Kickoff is on screen: an update then waits, rather than closing it mid-use. */

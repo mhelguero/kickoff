@@ -8,5 +8,6 @@ class App : Application() {
         Store.init(this)
         Notifier.createChannels(this)
         Tracker.schedulePeriodicRefresh(this)
+        Updater.schedulePeriodicCheck(this)
     }
 }

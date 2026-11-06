@@ -34,6 +34,7 @@ class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         Store.init(context)
         Tracker.schedulePeriodicRefresh(context)
+        Updater.schedulePeriodicCheck(context)
         Tracker.scheduleNextWatch(context)
     }
 }
