@@ -29,7 +29,10 @@ data class NewsItem(
     val teamId: String,
     val writer: String = "",
     val image: String? = null,         // thumbnail, for highlight videos
-)
+) {
+    /** A highlights video: a game's highlights card, or a highlight reel from the news. */
+    val isHighlight get() = image != null || Regex("""\bhighlights?\b""", RegexOption.IGNORE_CASE).containsMatchIn(title)
+}
 
 /**
  * The last week's team news for each followed team, from FotMob (which gathers SI, BBC, talkSPORT,
