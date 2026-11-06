@@ -583,7 +583,7 @@ private fun GameCard(m: Match, teams: List<Team>, muted: Boolean? = null, onClic
         Column(Modifier.padding(20.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 // The followed team's crest (the one whose color the card has), then the competition.
-                teams.firstOrNull { it.id in m.teamIds }?.let { TeamCrest(it.id, background, size = 24.dp, gap = 8.dp) }
+                teams.firstOrNull { it.id in m.teamIds }?.let { TeamCrest(it.id, background, size = 32.dp, gap = 10.dp) }
                 Text(m.league, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold,
                     modifier = Modifier.weight(1f))
                 // Just the minute ("63'") or "HT": the Live section already says it's live.
@@ -735,7 +735,7 @@ private fun Thumbnail(url: String) {
  * black card. Every other crest is shown as it is.
  */
 @Composable
-private fun TeamCrest(teamId: String, background: Color?, size: Dp = 40.dp, gap: Dp = 12.dp) {
+private fun TeamCrest(teamId: String, background: Color?, size: Dp = 48.dp, gap: Dp = 12.dp) {
     val context = LocalContext.current
     val url = "https://a.espncdn.com/i/teamlogos/soccer/500/$teamId.png"
     val crest by produceState<Pair<ImageBitmap, Float>?>(null, url) {
