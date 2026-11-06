@@ -19,6 +19,9 @@ object Espn {
     /** Upcoming games for a team. ESPN drops a game from this list once it's under way. */
     fun fixtures(teamId: String): List<Match> = schedule("$BASE/teams/$teamId/schedule?fixture=true")
 
+    /** The team's games played this season (with scores), every competition. */
+    fun results(teamId: String): List<Match> = schedule("$BASE/teams/$teamId/schedule")
+
     /**
      * Every soccer game on a UTC day (yyyyMMdd), including ones under way. Large (~800 KB), so only
      * used to catch a game already live for a newly followed team. League is filled in by the first poll.
