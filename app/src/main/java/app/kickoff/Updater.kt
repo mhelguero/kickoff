@@ -140,13 +140,29 @@ object Updater {
     }
 
     /**
-     * Can updates install by themselves here? Android 12+ allows it once Kickoff installed itself
-     * (it is its own "installer of record"); a copy installed from the browser can't yet.
+     * Can updates install by themselves here? Android 12+ lets an app update itself without asking
+     * (it must be allowed to install apps).
      */
-    fun canAutoUpdate(context: Context): Boolean {
-        if (Build.VERSION.SDK_INT < 31 || !canInstall(context)) return false
-        val installer = runCatching { context.packageManager.getInstallSourceInfo(context.packageName).installingPackageName }.getOrNull()
-        return installer == context.packageName
+    fun canAutoUpdate(context: Context): Boolean = Build.VERSION.SDK_INT >= 31 && canInstall(context)
+
+    private const val PREFS = "updater"
+    private const val REOPEN = "reopenUntil"
+
+    /** The update being installed was started on screen: open Kickoff again once it's installed. */
+    fun reopenAfterUpdate(context: Context) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putLong(REOPEN, System.currentTimeMillis() + 10 * 60_000).apply()
+    }
+
+    /** Just updated: reopen the app if the update was started on screen (Android may not allow it). */
+    fun reopenIfAsked(context: Context) {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val until = prefs.getLong(REOPEN, 0)
+        prefs.edit().remove(REOPEN).apply()
+        if (System.currentTimeMillis() > until) return
+        val open = context.packageManager.getLaunchIntentForPackage(context.packageName) ?: return
+        runCatching { context.startActivity(open.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+            .onFailure { Log.w("Updater", "reopen", it) }
     }
 
     /** Checks for (and installs) updates every hour in the background: one small GitHub request. */
@@ -210,7 +226,7 @@ class InstallReceiver : BroadcastReceiver() {
                 confirm?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 runCatching { context.startActivity(confirm) }.onFailure { Log.w("Updater", "confirm", it) }
             }
-            PackageInstaller.STATUS_SUCCESS -> Unit
+            PackageInstaller.STATUS_SUCCESS -> Updater.reopenIfAsked(context)
             // The user tapped Cancel: nothing to say.
             PackageInstaller.STATUS_FAILURE_ABORTED -> Unit
             else -> {

@@ -314,26 +314,13 @@ private fun HomeScreen(
     // its place, leaving the new section just off the top of the screen).
     LaunchedEffect(editingTeams) { if (editingTeams) listState.animateScrollToItem(0) }
     var updating by remember { mutableStateOf(false) }
+    val autoTried = remember { mutableSetOf<Long>() }   // versions installed automatically on opening
     val scope = rememberCoroutineScope()
     suspend fun checkUpdate() {
         // A failed check keeps any banner already showing.
         withContext(Dispatchers.IO) { runCatching { Updater.checkForUpdate(context) } }
             .onSuccess { update = it }
             .onFailure { Log.w("Kickoff", "update check failed", it) }
-    }
-    val lifecycle = LocalLifecycleOwner.current.lifecycle
-    LaunchedEffect(Unit) {
-        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
-            Updater.onScreen = true
-            try {
-                checkUpdate()
-                awaitCancellation()
-            } finally {
-                // Left the screen: a new version installs by itself moments later (Android 12+).
-                Updater.onScreen = false
-                if (update != null) Updater.scheduleAutoUpdate(context)
-            }
-        }
     }
     fun installUpdate(release: Updater.Release) {
         // Android asks once to let Kickoff install apps; the user comes back and taps Update again.
@@ -347,10 +334,35 @@ private fun HomeScreen(
             // Downloading, then handing the file to Android's installer, which then asks to confirm.
             val file = withContext(Dispatchers.IO) { runCatching { Updater.download(context, release) } }
             file.onSuccess { f ->
+                Updater.reopenAfterUpdate(context)
                 withContext(Dispatchers.IO) { runCatching { Updater.install(context, f) } }
                     .onFailure { Toast.makeText(context, "Couldn't start the update. Try again.", Toast.LENGTH_LONG).show() }
             }.onFailure { Toast.makeText(context, "Couldn't download the update. Try again.", Toast.LENGTH_LONG).show() }
             updating = false
+        }
+    }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(Unit) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            Updater.onScreen = true
+            try {
+                checkUpdate()
+                // Opening the app with an update out installs it right away (once per version per
+                // run, so a cancelled confirmation doesn't come back at every return to the app).
+                update?.let { release ->
+                    if (release.versionCode !in autoTried && !updating && Updater.canInstall(context)) {
+                        autoTried += release.versionCode
+                        installUpdate(release)
+                    }
+                }
+                awaitCancellation()
+            } finally {
+                // Left the screen: a new version installs by itself moments later (Android 12+),
+                // unless one was already started on screen (Android's confirmation is up, say).
+                Updater.onScreen = false
+                val pending = update
+                if (pending != null && !updating && pending.versionCode !in autoTried) Updater.scheduleAutoUpdate(context)
+            }
         }
     }
     val now = System.currentTimeMillis()
@@ -420,13 +432,8 @@ private fun HomeScreen(
                     item(key = "update") {
                         Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
                             Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Column(Modifier.weight(1f)) {
-                                    Text("Kickoff ${release.versionName} is available", fontWeight = FontWeight.Bold)
-                                    // Whether it will install by itself once the app is closed.
-                                    val auto = remember { Updater.canAutoUpdate(context) }
-                                    Text(if (auto) "Installs by itself when you leave the app" else "Tap Update to install",
-                                        style = MaterialTheme.typography.bodySmall)
-                                }
+                                Text("Kickoff ${release.versionName} is available", fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.weight(1f))
                                 if (updating) CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
                                 else Button(onClick = { installUpdate(release) }) { Text("Update") }
                             }

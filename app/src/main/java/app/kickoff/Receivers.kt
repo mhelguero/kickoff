@@ -36,5 +36,7 @@ class BootReceiver : BroadcastReceiver() {
         Tracker.schedulePeriodicRefresh(context)
         Updater.schedulePeriodicCheck(context)
         Tracker.scheduleNextWatch(context)
+        // Just updated from the open app: bring it back.
+        if (intent.action == Intent.ACTION_MY_PACKAGE_REPLACED) Updater.reopenIfAsked(context)
     }
 }
