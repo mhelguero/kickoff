@@ -25,6 +25,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -555,6 +556,8 @@ private fun NewsCard(n: NewsItem, teams: List<Team>) {
         else CardDefaults.cardColors(),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
+        // Highlight videos show their thumbnail across the top.
+        n.image?.let { Thumbnail(it) }
         Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             // Which team the story is about.
             TeamCrest(n.teamId)
@@ -577,6 +580,25 @@ private fun NewsCard(n: NewsItem, teams: List<Team>) {
                     style = MaterialTheme.typography.labelLarge, color = content.copy(alpha = 0.8f))
             }
         }
+    }
+}
+
+/**
+ * A video thumbnail, full width at 16:9; nothing until (or unless) it loads. YouTube's largest
+ * size doesn't exist for every video, so its standard size is tried next.
+ */
+@Composable
+private fun Thumbnail(url: String) {
+    val context = LocalContext.current
+    val image by produceState<ImageBitmap?>(null, url) {
+        value = withContext(Dispatchers.IO) {
+            Logos.load(context, url) ?: url.takeIf { "maxresdefault" in it }
+                ?.let { Logos.load(context, it.replace("maxresdefault", "hqdefault")) }
+        }
+    }
+    image?.let {
+        Image(it, contentDescription = null, contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f))
     }
 }
 

@@ -53,9 +53,14 @@ object FotMob {
             }.getOrNull()
         }
 
-    /** The official highlights video for a finished game (usually YouTube), or null if FotMob has none yet. */
-    fun highlights(matchId: String): String? =
-        get("$BASE/matchDetails?matchId=$matchId").obj["content"].obj["matchFacts"].obj["highlights"].obj.str("url")
+    /** A game's official highlights video (usually YouTube) and its thumbnail image. */
+    data class Highlight(val url: String, val image: String?)
+
+    /** The highlights for a finished game, or null if FotMob has none yet. */
+    fun highlights(matchId: String): Highlight? {
+        val h = get("$BASE/matchDetails?matchId=$matchId").obj["content"].obj["matchFacts"].obj["highlights"].obj
+        return h.str("url")?.let { Highlight(it, h.str("image")) }
+    }
 
     /** Names of the team's current squad, coach included. */
     fun squad(teamId: String): List<String> =

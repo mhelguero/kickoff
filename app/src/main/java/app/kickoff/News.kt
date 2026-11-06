@@ -28,6 +28,7 @@ data class NewsItem(
     val url: String,
     val teamId: String,
     val writer: String = "",
+    val image: String? = null,         // thumbnail, for highlight videos
 )
 
 /**
@@ -85,22 +86,30 @@ object News {
         return names
     }
 
-    private val highlightUrls = mutableMapOf<String, String>()   // FotMob match id -> video, once found
+    private val highlightUrls = mutableMapOf<String, FotMob.Highlight>()   // FotMob match id -> video, once found
 
     /** A card per game the team finished in the last week that has an official highlights video. */
     private fun highlights(team: Team, since: Long): List<NewsItem> {
         if (team.fotmobId.isBlank()) return emptyList()
         val now = System.currentTimeMillis()
         return FotMob.fixtures(team.fotmobId).filter { it.finished && it.startMillis in since..now }.mapNotNull { f ->
-            val url = synchronized(highlightUrls) { highlightUrls[f.id] }
+            val h = synchronized(highlightUrls) { highlightUrls[f.id] }
                 ?: runCatching { FotMob.highlights(f.id) }.getOrNull()?.also { synchronized(highlightUrls) { highlightUrls[f.id] = it } }
                 ?: return@mapNotNull null
+            val url = h.url
             val score = f.score.replace(" - ", "–")
             // Dated at the end of the game (kickoff + about 2 hours), when the video appears.
             val site = android.net.Uri.parse(url).host.orEmpty().removePrefix("www.")
             val source = if ("youtube" in site || "youtu.be" in site) "YouTube" else site
-            NewsItem("Highlights: ${f.home} $score ${f.away}", source, f.startMillis + 2 * 60 * 60 * 1000L, url, team.id)
+            NewsItem("Highlights: ${f.home} $score ${f.away}", source, f.startMillis + 2 * 60 * 60 * 1000L, url, team.id,
+                image = h.image ?: youtubeId(url)?.let { "https://i.ytimg.com/vi/$it/hqdefault.jpg" })
         }
+    }
+
+    /** The video id in a YouTube link ("watch?v=ID" or "youtu.be/ID"). */
+    private fun youtubeId(url: String): String? {
+        val uri = android.net.Uri.parse(url)
+        return uri.getQueryParameter("v") ?: uri.lastPathSegment?.takeIf { "youtu.be" in uri.host.orEmpty() }
     }
 
     /** FotMob's team news, 20 a page, newest first, back to [since]. */
