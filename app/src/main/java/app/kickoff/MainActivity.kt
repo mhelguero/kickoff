@@ -303,6 +303,9 @@ private fun HomeScreen(
     // When an update is found, scroll up so its banner (the list's first item) is in view.
     val listState = rememberLazyListState()
     LaunchedEffect(update) { if (update != null) listState.animateScrollToItem(0) }
+    // The teams section opens above the tabs: scroll up so it's in view (the list otherwise keeps
+    // its place, leaving the new section just off the top of the screen).
+    LaunchedEffect(editingTeams) { if (editingTeams) listState.animateScrollToItem(0) }
     var updating by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     suspend fun checkUpdate() {
