@@ -600,8 +600,9 @@ private fun GameCard(m: Match, teams: List<Team>, muted: Boolean? = null, onClic
                     modifier = Modifier.weight(1f))
                 // Just the minute ("63'") or "HT": the Live section already says it's live.
                 if (live) LiveBadge(m.statusLabel.removePrefix("LIVE ").trim())
-                // As big as the alerts bell beside it.
-                else Text(m.statusLabel.ifEmpty { m.kickoffTime() }, style = MaterialTheme.typography.titleLarge)
+                // As big as the alerts bell beside it, and bold.
+                else Text(m.statusLabel.ifEmpty { m.kickoffTime() }, style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold)
                 // This game's alerts on or off; finished games (muted = null) have no more alerts.
                 muted?.let { off ->
                     val context = LocalContext.current
