@@ -124,6 +124,21 @@ object Tracker {
                 val list = runCatching { FotMob.fixtures(id) }.onFailure(failed("games")).getOrNull() ?: continue
                 if (lineUp(list)) { picked = id to list; break }
             }
+            // Not found by name (e.g. ESPN's "United States" is FotMob's "USA"): find it through
+            // the opponent of one of its next games, whose search results include that game.
+            if (picked == null) {
+                val upcoming = games.filter { it.dateMillis > now - 3 * HOUR }.sortedBy { it.dateMillis }.take(2)
+                for (m in upcoming) {
+                    val opponent = if (m.home == team.name) m.away else m.home
+                    val byOpponent = runCatching { FotMob.teamsByOpponent(opponent, m.dateMillis) }
+                        .onFailure(failed("team search")).getOrDefault(emptyList())
+                    for (id in byOpponent.filter { it !in candidates.take(4) }) {
+                        val list = runCatching { FotMob.fixtures(id) }.onFailure(failed("games")).getOrNull() ?: continue
+                        if (lineUp(list)) { picked = id to list; break }
+                    }
+                    if (picked != null) break
+                }
+            }
             // None found: forget a wrong pick, so the next refresh searches again.
             val id = picked?.first ?: ""
             if (id.isEmpty() && team.fotmobId.isBlank()) continue

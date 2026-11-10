@@ -52,6 +52,30 @@ object FotMob {
         return ids.distinct()
     }
 
+    /**
+     * When a team's own name finds nothing (e.g. ESPN's "United States" is FotMob's "USA"), search
+     * for an opponent instead: FotMob's results include their game, which names both sides. Returns
+     * the other side of games against [opponent] kicking off within 3 hours of [kickoffMillis].
+     */
+    fun teamsByOpponent(opponent: String, kickoffMillis: Long): List<String> {
+        val root = get("$BASE/search/suggest?term=${URLEncoder.encode(opponent, "UTF-8")}&lang=en")
+        return root.arr.flatMap { it.obj["suggestions"].arr }.map { it.obj }
+            .filter { it.str("type") == "match" }
+            .filter { m ->
+                val t = m.str("matchDate")?.let { runCatching { OffsetDateTime.parse(it).toInstant().toEpochMilli() }.getOrNull() }
+                t != null && kotlin.math.abs(t - kickoffMillis) <= 3 * 60 * 60 * 1000L
+            }
+            .mapNotNull { m ->
+                // The side that isn't the opponent we searched for.
+                when (norm(opponent)) {
+                    norm(m.str("homeTeamName")) -> m.str("awayTeamId")
+                    norm(m.str("awayTeamName")) -> m.str("homeTeamId")
+                    else -> null
+                }
+            }
+            .distinct()
+    }
+
     private val GENERIC = setOf("fc", "cf", "sc", "cd", "club", "deportivo", "atletico", "real", "united", "city")
 
     /** The team's games this season, past, live and upcoming. */
