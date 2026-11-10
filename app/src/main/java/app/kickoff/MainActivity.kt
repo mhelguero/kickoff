@@ -105,6 +105,7 @@ import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -270,12 +271,17 @@ private fun Root(openMatch: String?, onOpenMatch: (String?) -> Unit, needsSetup:
         }
     }
 
+    // The home screen's state (tab, scroll position, open sections) is kept while a game's page
+    // is open, so Back returns to exactly where the user was.
+    val saved = rememberSaveableStateHolder()
     val match = openMatch?.let { state.matches[it] }
     if (match != null) {
         BackHandler { onOpenMatch(null) }
         MatchScreen(match, onBack = { onOpenMatch(null) })
     } else {
-        HomeScreen(state, refreshing, ::refresh, onOpenMatch, needsSetup, onFixSetup)
+        saved.SaveableStateProvider("home") {
+            HomeScreen(state, refreshing, ::refresh, onOpenMatch, needsSetup, onFixSetup)
+        }
     }
 }
 
@@ -325,10 +331,20 @@ private fun HomeScreen(
     var update by remember { mutableStateOf<Updater.Release?>(null) }
     // When an update is found, scroll up so its banner (the list's first item) is in view.
     val listState = rememberLazyListState()
-    LaunchedEffect(update) { if (update != null) listState.animateScrollToItem(0) }
+    // Once per version (not again on coming back from a game's page).
+    var bannerShownFor by rememberSaveable { mutableStateOf(0L) }
+    LaunchedEffect(update) {
+        val u = update ?: return@LaunchedEffect
+        if (u.versionCode != bannerShownFor) { bannerShownFor = u.versionCode; listState.animateScrollToItem(0) }
+    }
     // The teams section opens above the tabs: scroll up so it's in view (the list otherwise keeps
     // its place, leaving the new section just off the top of the screen).
-    LaunchedEffect(editingTeams) { if (editingTeams) listState.animateScrollToItem(0) }
+    // Only when Edit teams is tapped, not again on coming back from a game's page.
+    var editScrolled by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(editingTeams) {
+        if (editingTeams && !editScrolled) listState.animateScrollToItem(0)
+        editScrolled = editingTeams
+    }
     var updating by remember { mutableStateOf(false) }
     val autoTried = remember { mutableSetOf<Long>() }   // versions installed automatically on opening
     val scope = rememberCoroutineScope()
@@ -631,7 +647,7 @@ private fun GameCard(m: Match, teams: List<Team>, muted: Boolean? = null, onClic
                 }
             }
             Spacer(Modifier.height(8.dp))
-            Text(scoreLine(m), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            TeamsLine(m)
             // Where to watch only matters before and during the game.
             if (m.state != "post") {
                 Spacer(Modifier.height(8.dp))
@@ -805,6 +821,22 @@ private fun contentOn(background: Color?): Color = when {
 private fun teamColor(m: Match, teams: List<Team>): Color? = colorOf(teams.firstOrNull { it.id in m.teamIds })
 
 /** Live and finished games show the score. */
+/**
+ * The same layout on every card: home team on the left, the score (or "vs") in the middle, away
+ * team on the right, each name wrapping on its own side.
+ */
+@Composable
+private fun TeamsLine(m: Match) {
+    val style = MaterialTheme.typography.titleLarge
+    val middle = if (m.state != "pre" && m.homeScore != null) "${m.homeScore} – ${m.awayScore}" else "vs"
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(m.home, style = style, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f), textAlign = TextAlign.Start)
+        Text(middle, style = style, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center,
+            modifier = Modifier.padding(horizontal = 10.dp).widthIn(min = 56.dp))
+        Text(m.away, style = style, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f), textAlign = TextAlign.End)
+    }
+}
+
 private fun scoreLine(m: Match) =
     if (m.state != "pre" && m.homeScore != null) "${m.home} ${m.homeScore} – ${m.awayScore} ${m.away}"
     else m.title
