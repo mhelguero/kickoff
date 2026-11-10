@@ -285,7 +285,7 @@ private fun HomeScreen(
     val context = LocalContext.current
     var showSearch by remember { mutableStateOf(false) }
     var removing by remember { mutableStateOf<Team?>(null) }
-    var lastWeekOpen by rememberSaveable { mutableStateOf(false) }
+    var endedOpen by rememberSaveable { mutableStateOf(false) }
     var editingTeams by rememberSaveable { mutableStateOf(false) }
 
     // Games or News tab. News loads when its tab is shown (again after 15 minutes or a team change).
@@ -370,16 +370,11 @@ private fun HomeScreen(
     val today = LocalDate.now()
     val sorted = state.matches.values.sortedBy { it.dateMillis }
     val live = sorted.filter { it.state == "in" }
-    // Played to the end today (postponed/canceled games aren't "ended"); earlier days drop off.
-    val ended = sorted.filter { it.state == "post" && it.completed && it.zoned().toLocalDate() == today }
     // Not started yet, today or later.
     val upcoming = sorted.filter { it.state == "pre" && !it.zoned().toLocalDate().isBefore(today) }
-    // Last calendar week, Sunday to Saturday: played games only (postponed ones never happened).
-    val lastWeekStart = today.with(java.time.temporal.TemporalAdjusters.previousOrSame(java.time.DayOfWeek.SUNDAY)).minusDays(7)
-    val lastWeek = sorted.filter { m ->
-        val d = m.zoned().toLocalDate()
-        m.state == "post" && m.completed && !d.isBefore(lastWeekStart) && d.isBefore(lastWeekStart.plusDays(7))
-    }
+    // Played since the start of last calendar week (Sunday), newest first; postponed games never happened.
+    val endedSince = today.with(java.time.temporal.TemporalAdjusters.previousOrSame(java.time.DayOfWeek.SUNDAY)).minusDays(7)
+    val ended = sorted.filter { m -> m.state == "post" && m.completed && !m.zoned().toLocalDate().isBefore(endedSince) }.reversed()
 
     Scaffold(
         topBar = {
@@ -533,26 +528,22 @@ private fun HomeScreen(
                         item(key = "live-header") { SectionHeader("Live") }
                         items(live, key = { it.id }) { m -> GameCard(m, state.teams, state.alerts[m.id]?.muted == true) { onOpenMatch(m.id) } }
                     }
+                    // Played since the start of last week (Sunday), newest first, folded away until tapped.
                     if (ended.isNotEmpty()) {
-                        item(key = "ended-header") { SectionHeader("Ended") }
-                        items(ended, key = { it.id }) { m -> GameCard(m, state.teams) { onOpenMatch(m.id) } }
-                    }
-                    // Last calendar week (Sunday to Saturday), folded away until tapped.
-                    if (lastWeek.isNotEmpty()) {
-                        item(key = "lastweek-header") {
-                            Row(Modifier.fillMaxWidth().clickable { lastWeekOpen = !lastWeekOpen }.padding(top = 8.dp),
+                        item(key = "ended-header") {
+                            Row(Modifier.fillMaxWidth().clickable { endedOpen = !endedOpen }.padding(top = 8.dp),
                                 verticalAlignment = Alignment.CenterVertically) {
-                                Text("Last Week", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                                Text("Ended", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                                 Spacer(Modifier.width(8.dp))
-                                Text("${lastWeekStart.format(shortDateFmt)} – ${lastWeekStart.plusDays(6).format(shortDateFmt)}",
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
-                                Icon(if (lastWeekOpen) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                                    if (lastWeekOpen) "Hide last week" else "Show last week")
+                                Text("since ${endedSince.format(shortDateFmt)}", color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.weight(1f))
+                                Icon(if (endedOpen) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                    if (endedOpen) "Hide ended games" else "Show ended games")
                             }
                         }
-                        if (lastWeekOpen) lastWeek.groupBy { it.zoned().toLocalDate() }.forEach { (day, dayGames) ->
-                            item(key = "lastweek-day-$day") { DayDivider(dividerFmt.format(day)) }
-                            items(dayGames, key = { "lastweek-" + it.id }) { m -> GameCard(m, state.teams) { onOpenMatch(m.id) } }
+                        if (endedOpen) ended.groupBy { it.zoned().toLocalDate() }.forEach { (day, dayGames) ->
+                            item(key = "ended-day-$day") { DayDivider(dividerFmt.format(day)) }
+                            items(dayGames, key = { "ended-" + it.id }) { m -> GameCard(m, state.teams) { onOpenMatch(m.id) } }
                         }
                     }
                     item(key = "upcoming-header") { SectionHeader("Upcoming") }
@@ -626,9 +617,12 @@ private fun GameCard(m: Match, teams: List<Team>, muted: Boolean? = null, onClic
             }
             Spacer(Modifier.height(8.dp))
             Text(scoreLine(m), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(8.dp))
-            Text("📺 " + Streaming.summary(m, Streaming.DOT).ifEmpty { "Broadcaster not listed yet" }, style = MaterialTheme.typography.bodyLarge,
-                color = content.copy(alpha = 0.8f))
+            // Where to watch only matters before and during the game.
+            if (m.state != "post") {
+                Spacer(Modifier.height(8.dp))
+                Text("📺 " + Streaming.summary(m, Streaming.DOT).ifEmpty { "Broadcaster not listed yet" }, style = MaterialTheme.typography.bodyLarge,
+                    color = content.copy(alpha = 0.8f))
+            }
         }
     }
 }
@@ -804,7 +798,7 @@ private fun MatchScreen(m: Match, onBack: () -> Unit) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Where to watch") },
+                title = { Text(if (m.state == "post") "Game" else "Where to watch") },
                 navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
             )
         },
@@ -818,16 +812,19 @@ private fun MatchScreen(m: Match, onBack: () -> Unit) {
             Text(scoreLine(m), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
             Text(listOf(m.statusLabel, m.localTime()).filter { it.isNotBlank() }.joinToString(Streaming.DOT),
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
-            HorizontalDivider()
-            if (channels.isEmpty()) Text("No US channel listed for this game yet.")
-            else {
-                if (channels.any { it.country == Streaming.BOLIVIA }) Text("No US channel listed. Shown in Bolivia on:")
-                ChannelCards(channels, m)
-            }
-            TextButton(onClick = { Streaming.openUrl(context, Streaming.findMoreUrl(m)) }) {
-                Icon(Icons.Default.Search, null, Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("Search for other ways to watch")
+            // Finished games: no channels, just the lineups (and who was out).
+            if (m.state != "post") {
+                HorizontalDivider()
+                if (channels.isEmpty()) Text("No US channel listed for this game yet.")
+                else {
+                    if (channels.any { it.country == Streaming.BOLIVIA }) Text("No US channel listed. Shown in Bolivia on:")
+                    ChannelCards(channels, m)
+                }
+                TextButton(onClick = { Streaming.openUrl(context, Streaming.findMoreUrl(m)) }) {
+                    Icon(Icons.Default.Search, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Search for other ways to watch")
+                }
             }
             LineupSection(m)
         }
@@ -841,10 +838,20 @@ private fun MatchScreen(m: Match, onBack: () -> Unit) {
  */
 @Composable
 private fun LineupSection(m: Match) {
-    val lineups by produceState<FotMob.Lineups?>(null, m.fotmobId) {
-        if (m.fotmobId.isBlank()) return@produceState
+    val lineups by produceState<FotMob.Lineups?>(null, m.id, m.fotmobId) {
+        // Games found only through ESPN's results (e.g. last week's) don't know their FotMob id yet:
+        // it's the game of a followed team's FotMob fixtures that kicks off within 3 hours.
+        val fid = m.fotmobId.ifBlank {
+            withContext(Dispatchers.IO) {
+                Store.state.value.teams.filter { it.id in m.teamIds && it.fotmobId.isNotBlank() }.firstNotNullOfOrNull { t ->
+                    runCatching { FotMob.fixtures(t.fotmobId) }.getOrNull()
+                        ?.firstOrNull { kotlin.math.abs(it.startMillis - m.dateMillis) <= 3 * 60 * 60 * 1000L }?.id
+                }
+            }.orEmpty()
+        }
+        if (fid.isBlank()) return@produceState
         while (true) {
-            withContext(Dispatchers.IO) { runCatching { FotMob.lineups(m.fotmobId) }.getOrNull() }?.let { value = it }
+            withContext(Dispatchers.IO) { runCatching { FotMob.lineups(fid) }.getOrNull() }?.let { value = it }
             val soon = m.state != "post" && System.currentTimeMillis() > m.dateMillis - 3 * 60 * 60 * 1000L
             if (value?.announced == true || !soon) break
             delay(2 * 60 * 1000L)
