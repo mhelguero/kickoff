@@ -55,6 +55,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
@@ -70,7 +72,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.InputChip
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Tab
@@ -284,7 +285,7 @@ private fun HomeScreen(
     val context = LocalContext.current
     var showSearch by remember { mutableStateOf(false) }
     var removing by remember { mutableStateOf<Team?>(null) }
-    var testStep by rememberSaveable { mutableIntStateOf(0) }
+    var lastWeekOpen by rememberSaveable { mutableStateOf(false) }
     var editingTeams by rememberSaveable { mutableStateOf(false) }
 
     // Games or News tab. News loads when its tab is shown (again after 15 minutes or a team change).
@@ -373,6 +374,12 @@ private fun HomeScreen(
     val ended = sorted.filter { it.state == "post" && it.completed && it.zoned().toLocalDate() == today }
     // Not started yet, today or later.
     val upcoming = sorted.filter { it.state == "pre" && !it.zoned().toLocalDate().isBefore(today) }
+    // Last calendar week, Sunday to Saturday: played games only (postponed ones never happened).
+    val lastWeekStart = today.with(java.time.temporal.TemporalAdjusters.previousOrSame(java.time.DayOfWeek.SUNDAY)).minusDays(7)
+    val lastWeek = sorted.filter { m ->
+        val d = m.zoned().toLocalDate()
+        m.state == "post" && m.completed && !d.isBefore(lastWeekStart) && d.isBefore(lastWeekStart.plusDays(7))
+    }
 
     Scaffold(
         topBar = {
@@ -530,28 +537,29 @@ private fun HomeScreen(
                         item(key = "ended-header") { SectionHeader("Ended") }
                         items(ended, key = { it.id }) { m -> GameCard(m, state.teams) { onOpenMatch(m.id) } }
                     }
+                    // Last calendar week (Sunday to Saturday), folded away until tapped.
+                    if (lastWeek.isNotEmpty()) {
+                        item(key = "lastweek-header") {
+                            Row(Modifier.fillMaxWidth().clickable { lastWeekOpen = !lastWeekOpen }.padding(top = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically) {
+                                Text("Last Week", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                                Spacer(Modifier.width(8.dp))
+                                Text("${lastWeekStart.format(shortDateFmt)} – ${lastWeekStart.plusDays(6).format(shortDateFmt)}",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+                                Icon(if (lastWeekOpen) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                    if (lastWeekOpen) "Hide last week" else "Show last week")
+                            }
+                        }
+                        if (lastWeekOpen) lastWeek.groupBy { it.zoned().toLocalDate() }.forEach { (day, dayGames) ->
+                            item(key = "lastweek-day-$day") { DayDivider(dividerFmt.format(day)) }
+                            items(dayGames, key = { "lastweek-" + it.id }) { m -> GameCard(m, state.teams) { onOpenMatch(m.id) } }
+                        }
+                    }
                     item(key = "upcoming-header") { SectionHeader("Upcoming") }
                     if (upcoming.isEmpty()) item { Hint(if (refreshing) "Loading…" else "No upcoming games found.") }
                     upcoming.groupBy { it.zoned().toLocalDate() }.forEach { (day, dayGames) ->
                         item(key = "day-$day") { DayDivider(dividerFmt.format(day)) }
                         items(dayGames, key = { it.id }) { m -> GameCard(m, state.teams, state.alerts[m.id]?.muted == true) { onOpenMatch(m.id) } }
-                    }
-                    item {
-                        OutlinedButton(onClick = {
-                            // Separate id, so it never replaces a real game's alert or marks that game read.
-                            val base = (live + upcoming).firstOrNull() ?: Match("", now, "Real Madrid", "Valencia", league = "LALIGA",
-                                tv = mapOf(Streaming.COUNTRY to listOf("ESPN+")))
-                            // Each tap shows the next alert of a game: kickoff, 2nd half, full time, then kickoff again.
-                            val phase = testPhases[testStep % testPhases.size]
-                            val score = when (phase) { Phase.SECOND_HALF -> "1" to "0"; Phase.ENDED -> "2" to "1"; else -> null }
-                            val sample = base.copy(id = "test", homeScore = score?.first, awayScore = score?.second)
-                            if (notificationsOn(context)) {
-                                Notifier.gameAlert(context, sample, phase)
-                                testStep++
-                            } else {
-                                Toast.makeText(context, "Notifications are off for Kickoff. Tap Fix above.", Toast.LENGTH_LONG).show()
-                            }
-                        }, Modifier.padding(top = 8.dp)) { Text("Send a test notification") }
                     }
                 }
             }
@@ -641,7 +649,7 @@ private fun LiveBadge(label: String) {
     )
 }
 
-private val testPhases = listOf(Phase.FIRST_HALF, Phase.SECOND_HALF, Phase.ENDED)
+private val shortDateFmt = DateTimeFormatter.ofPattern("MMM d")
 
 @Composable
 private fun SectionHeader(title: String) {

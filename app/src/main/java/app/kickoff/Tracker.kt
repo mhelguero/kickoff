@@ -31,6 +31,8 @@ const val WATCH_MAX_MS = 4 * HOUR
 private val ESPN_DAY_ZONE = ZoneId.of("America/New_York")
 private val BOLIVIA_ZONE = ZoneId.of("America/La_Paz")
 private const val PRE_GRACE_MS = 90 * MIN
+/** Played games are kept this long: enough for the whole of last week (Sunday to Saturday). */
+private const val KEEP_MS = 15 * 24 * HOUR
 
 object Tracker {
 
@@ -44,6 +46,12 @@ object Tracker {
             runCatching { Espn.fixtures(team.id) }
                 .onSuccess { list -> list.forEach { fresh[it.id] = it } }
                 .onFailure { Log.w(TAG, "fixtures ${team.name} failed", it) }
+            // Played games of the last two weeks, for the Last Week section (upcoming ones win).
+            runCatching { Espn.results(team.id) }
+                .onSuccess { list ->
+                    list.filter { it.state == "post" && it.dateMillis > now - KEEP_MS }.forEach { fresh.putIfAbsent(it.id, it) }
+                }
+                .onFailure { Log.w(TAG, "results ${team.name} failed", it) }
         }
         // A game already under way isn't in the fixtures list. Teams with nothing stored yet (just
         // added, or first launch) may be mid-game, so check the scoreboards for the last few hours.
@@ -76,7 +84,7 @@ object Tracker {
             val followed = s.teams.map { it.id }.toSet()
             val merged = fresh.mapValues { (id, f) -> mergeRefresh(s.matches[id], f) }
             val kept = (s.matches + merged).filterValues { m ->
-                m.dateMillis > now - 2 * 24 * HOUR && m.teamIds.any { it in followed }
+                m.dateMillis > now - KEEP_MS && m.teamIds.any { it in followed }
             }
             s.copy(
                 matches = kept,

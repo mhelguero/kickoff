@@ -19,8 +19,15 @@ object Espn {
     /** Upcoming games for a team. ESPN drops a game from this list once it's under way. */
     fun fixtures(teamId: String): List<Match> = schedule("$BASE/teams/$teamId/schedule?fixture=true")
 
-    /** The team's games played this season (with scores), every competition. */
-    fun results(teamId: String): List<Match> = schedule("$BASE/teams/$teamId/schedule")
+    /**
+     * The team's games played this season (with scores), every competition, newest first. Some teams (e.g. MLS clubs) only list them when the
+     * season is given, so this year's season is asked for too.
+     */
+    fun results(teamId: String): List<Match> {
+        val year = java.time.Year.now().value
+        return (runCatching { schedule("$BASE/teams/$teamId/schedule") }.getOrDefault(emptyList()) +
+            schedule("$BASE/teams/$teamId/schedule?season=$year")).distinctBy { it.id }
+    }
 
     /**
      * Every soccer game on a UTC day (yyyyMMdd), including ones under way. Large (~800 KB), so only
