@@ -838,7 +838,7 @@ private fun MatchScreen(m: Match, onBack: () -> Unit) {
  */
 @Composable
 private fun LineupSection(m: Match) {
-    val lineups by produceState<FotMob.Lineups?>(null, m.id, m.fotmobId) {
+    val details by produceState<FotMob.Details?>(null, m.id, m.fotmobId) {
         // Games found only through ESPN's results (e.g. last week's) don't know their FotMob id yet:
         // it's the game of a followed team's FotMob fixtures that kicks off within 3 hours.
         val fid = m.fotmobId.ifBlank {
@@ -851,13 +851,40 @@ private fun LineupSection(m: Match) {
         }
         if (fid.isBlank()) return@produceState
         while (true) {
-            withContext(Dispatchers.IO) { runCatching { FotMob.lineups(fid) }.getOrNull() }?.let { value = it }
+            withContext(Dispatchers.IO) { runCatching { FotMob.details(fid) }.getOrNull() }?.let { value = it }
             val soon = m.state != "post" && System.currentTimeMillis() > m.dateMillis - 3 * 60 * 60 * 1000L
-            if (value?.announced == true || !soon) break
+            if (value?.lineups?.announced == true || !soon) break
             delay(2 * 60 * 1000L)
         }
     }
-    val l = lineups ?: return
+    // The league table (finished games only), loaded after the rest.
+    val table by produceState<List<FotMob.TableRow>>(emptyList(), details?.tableLeague) {
+        val d = details ?: return@produceState
+        if (m.state != "post" || d.tableLeague == null) return@produceState
+        value = withContext(Dispatchers.IO) { runCatching { FotMob.table(d.tableLeague, d.teamIds) }.getOrDefault(emptyList()) }
+    }
+    val d = details ?: return
+    if (m.state == "post") {
+        if (d.goals.isNotEmpty()) GoalsCard(d.goals, m)
+        d.star?.let { star ->
+            Card(Modifier.fillMaxWidth()) {
+                Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Player of the match", style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(star.name, fontWeight = FontWeight.Bold)
+                        Text(star.team, style = MaterialTheme.typography.bodySmall)
+                    }
+                    if (star.rating.isNotBlank()) RatingBadge(star.rating.toDoubleOrNull() ?: 0.0, big = true)
+                }
+            }
+        }
+    }
+    val l = d.lineups
+    if (l == null) {
+        if (table.isNotEmpty()) TableCard(table, d.teamIds)
+        return
+    }
     HorizontalDivider()
     if (l.announced) {
         Text("Lineups", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
@@ -883,6 +910,78 @@ private fun LineupSection(m: Match) {
             }
         }
     }
+    if (table.isNotEmpty()) TableCard(table, d.teamIds)
+}
+
+/** The goals in order: home team's on the left, away team's on the right, with assists. */
+@Composable
+private fun GoalsCard(goals: List<FotMob.Goal>, m: Match) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Goals", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            goals.forEach { g ->
+                val text = buildString {
+                    append(g.scorer)
+                    if (g.note.isNotBlank()) append(" (${g.note})")
+                }
+                Column(Modifier.fillMaxWidth(), horizontalAlignment = if (g.home) Alignment.Start else Alignment.End) {
+                    Text("${g.minute}  $text", fontWeight = FontWeight.Bold)
+                    if (g.assist.isNotBlank()) Text("Assist: ${g.assist}", style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            Text("${m.home} left • ${m.away} right", style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+/** A FotMob rating, colored like FotMob's: green for good, orange for poor. */
+@Composable
+private fun RatingBadge(rating: Double, big: Boolean = false) {
+    val color = when {
+        rating >= 8.0 -> Color(0xFF1E88E5)
+        rating >= 7.0 -> Color(0xFF2E9E4F)
+        rating >= 6.0 -> Color(0xFFF2A600)
+        else -> Color(0xFFE5533D)
+    }
+    Text(
+        "%.1f".format(rating),
+        color = Color.White,
+        fontWeight = FontWeight.Bold,
+        style = if (big) MaterialTheme.typography.titleMedium else MaterialTheme.typography.labelMedium,
+        modifier = Modifier.background(color, RoundedCornerShape(6.dp)).padding(horizontal = 6.dp, vertical = 2.dp),
+    )
+}
+
+/** The league table: the rows around each team in the game, theirs in bold. */
+@Composable
+private fun TableCard(rows: List<FotMob.TableRow>, teamIds: List<String>) {
+    // Two places either side of each team, so a long table (36 in the Champions League) stays short.
+    val near = rows.indices.filter { i -> rows.indices.any { j -> rows[j].teamId in teamIds && kotlin.math.abs(i - j) <= 2 } }
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("Table", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Row {
+                Text("#", Modifier.width(28.dp), style = MaterialTheme.typography.labelMedium)
+                Text("Team", Modifier.weight(1f), style = MaterialTheme.typography.labelMedium)
+                listOf("P", "GD", "Pts").forEach { Text(it, Modifier.width(36.dp), style = MaterialTheme.typography.labelMedium) }
+            }
+            near.forEachIndexed { k, i ->
+                if (k > 0 && i != near[k - 1] + 1) Text("…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                val r = rows[i]
+                val ours = r.teamId in teamIds
+                val w = if (ours) FontWeight.Bold else null
+                Row {
+                    Text("${r.pos}", Modifier.width(28.dp), fontWeight = w)
+                    Text(r.team, Modifier.weight(1f), fontWeight = w)
+                    Text("${r.played}", Modifier.width(36.dp), fontWeight = w)
+                    Text(if (r.goalDiff > 0) "+${r.goalDiff}" else "${r.goalDiff}", Modifier.width(36.dp), fontWeight = w)
+                    Text("${r.points}", Modifier.width(36.dp), fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
 }
 
 /** One team's starting XI with shirt numbers, then its coach and bench. */
@@ -895,17 +994,28 @@ private fun LineupCard(side: FotMob.Side) {
                 if (side.formation.isNotBlank()) Text(side.formation, fontWeight = FontWeight.Bold)
             }
             side.starters.forEach { p ->
-                Row {
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(p.number, modifier = Modifier.width(32.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(p.name)
+                    Text(p.name, modifier = Modifier.weight(1f))
+                    // Finished games: each player's FotMob rating.
+                    p.rating?.let { RatingBadge(it) }
                 }
             }
             if (side.coach.isNotBlank()) {
                 Spacer(Modifier.height(4.dp))
                 Text("Coach: ${side.coach}", style = MaterialTheme.typography.bodySmall)
             }
-            if (side.bench.isNotEmpty()) {
-                Text("Bench: " + side.bench.joinToString(", ") { it.name }, style = MaterialTheme.typography.bodySmall,
+            // Subs who came on (they have a rating), then the rest of the bench.
+            side.bench.filter { it.rating != null }.forEach { p ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(p.number, modifier = Modifier.width(32.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("${p.name} (sub)", modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    RatingBadge(p.rating!!)
+                }
+            }
+            val unused = side.bench.filter { it.rating == null }
+            if (unused.isNotEmpty()) {
+                Text("Bench: " + unused.joinToString(", ") { it.name }, style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }

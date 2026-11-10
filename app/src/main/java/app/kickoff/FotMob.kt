@@ -76,7 +76,8 @@ object FotMob {
             .distinct()
     }
 
-    data class Player(val name: String, val number: String = "")
+    /** [rating]: FotMob's player rating (e.g. 7.2), for players who played in a finished game. */
+    data class Player(val name: String, val number: String = "", val rating: Double? = null)
     /** A player who'll miss the game, e.g. ("Rodrygo", "Injury", "Late December 2026"). */
     data class Absence(val name: String, val reason: String, val back: String)
     data class Side(
@@ -92,11 +93,57 @@ object FotMob {
         val anyOut get() = home.out.isNotEmpty() || away.out.isNotEmpty()
     }
 
+    /** A goal: minute ("90+3'"), scorer, assist (may be ""), which side, and "pen" / "OG" if so. */
+    data class Goal(val minute: String, val scorer: String, val assist: String, val home: Boolean, val note: String)
+    data class Star(val name: String, val team: String, val rating: String)
+    /** One table row: position, team, games played, goal difference, points. */
+    data class TableRow(val pos: Int, val team: String, val teamId: String, val played: Int, val goalDiff: Int, val points: Int)
+
+    /**
+     * What FotMob has for a game: lineups and absences (null if neither), and once it's played, the
+     * goals and player of the match. [tableLeague] is the league whose table it belongs to (none for
+     * cups without a table, friendlies), with the two teams' FotMob ids.
+     */
+    data class Details(
+        val lineups: Lineups?,
+        val goals: List<Goal>,
+        val star: Star?,
+        val tableLeague: String?,
+        val teamIds: List<String>,
+    )
+
     /** A game's lineups and absences (injuries, suspensions), or null if FotMob has none. */
-    fun lineups(matchId: String): Lineups? {
-        val lu = get("$BASE/matchDetails?matchId=$matchId").obj["content"].obj["lineup"] as? JsonObject ?: return null
+    fun lineups(matchId: String): Lineups? = details(matchId).lineups
+
+    fun details(matchId: String): Details {
+        val content = get("$BASE/matchDetails?matchId=$matchId").obj["content"].obj
+        val facts = content["matchFacts"].obj
+        val goals = facts["events"].obj["events"].arr.map { it.obj }
+            .filter { it.str("type") == "Goal" && it.str("isPenaltyShootoutEvent") != "true" }
+            .map { e ->
+                val minute = e.str("timeStr")?.replace(" ", "")?.let { if (it.endsWith("'")) it else "$it'" }
+                    ?: "${e.str("time").orEmpty()}${e.str("overloadTime")?.let { "+$it" }.orEmpty()}'"
+                val note = when {
+                    e.str("ownGoal") == "true" -> "OG"
+                    e.str("goalDescription").orEmpty().contains("penalty", ignoreCase = true) -> "pen"
+                    else -> ""
+                }
+                Goal(minute, e.str("nameStr") ?: e["player"].obj.str("name").orEmpty(),
+                    e.str("assistStr").orEmpty().removePrefix("assist by ").trim(), e.str("isHome") == "true", note)
+            }
+        val potm = facts["playerOfTheMatch"].obj
+        val star = potm["name"].obj.str("fullName")?.let { Star(it, potm.str("teamName").orEmpty(), potm["rating"].obj.str("num").orEmpty()) }
+        val table = content["table"].obj
+        val tableLeague = (table.str("parentLeagueId") ?: table.str("leagueId"))?.takeIf { table.isNotEmpty() }
+        val teamIds = table["teams"].arr.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+        return Details(lineups(content["lineup"] as? JsonObject), goals, star, tableLeague, teamIds)
+    }
+
+    private fun lineups(lu: JsonObject?): Lineups? {
+        if (lu == null) return null
         fun players(e: JsonElement?) = e.arr.mapNotNull { p ->
-            p.obj.str("name")?.let { Player(it, p.obj.str("shirtNumber").orEmpty()) }
+            val rating = p.obj["performance"].obj.str("rating")?.toDoubleOrNull()
+            p.obj.str("name")?.let { Player(it, p.obj.str("shirtNumber").orEmpty(), rating) }
         }
         fun side(key: String): Side {
             val t = lu[key].obj
@@ -110,6 +157,24 @@ object FotMob {
                 t["coach"].obj.str("name").orEmpty(), out)
         }
         return Lineups(side("homeTeam"), side("awayTeam")).takeIf { it.announced || it.anyOut }
+    }
+
+    /**
+     * The league's current table: the group that holds one of [teamIds] when it has several (e.g.
+     * MLS's conferences), else the whole table.
+     */
+    fun table(leagueId: String, teamIds: List<String>): List<TableRow> {
+        val root = get("$BASE/tltable?leagueId=$leagueId").let { (it as? JsonArray)?.firstOrNull() ?: it }.obj
+        val data = root["data"].obj.ifEmpty { root }
+        val groups = (listOf(data["table"].obj["all"].arr) +
+            data["tables"].arr.map { it.obj["table"].obj["all"].arr }).filter { it.isNotEmpty() }
+        val rows = groups.firstOrNull { g -> g.any { it.obj.str("id") in teamIds } } ?: groups.firstOrNull() ?: return emptyList()
+        return rows.mapNotNull { r ->
+            val o = r.obj
+            TableRow(o.str("idx")?.toIntOrNull() ?: return@mapNotNull null, o.str("shortName") ?: o.str("name").orEmpty(),
+                o.str("id").orEmpty(), o.str("played")?.toIntOrNull() ?: 0, o.str("goalConDiff")?.toIntOrNull() ?: 0,
+                o.str("pts")?.toIntOrNull() ?: 0)
+        }
     }
 
     private val GENERIC = setOf("fc", "cf", "sc", "cd", "club", "deportivo", "atletico", "real", "united", "city")
