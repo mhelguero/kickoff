@@ -83,7 +83,19 @@ object FotMob {
         val rating: Double? = null,
         val x: Float? = null,   // place on the pitch, 0 = left to 1 = right (starters)
         val y: Float? = null,   // 0 = own goal line to 1 = the far end (starters)
-    )
+        val id: String = "",
+        val lastName: String = "",
+    ) {
+        /** FotMob's photo of the player. */
+        val photo get() = "https://images.fotmob.com/image_resources/playerimages/$id.png"
+
+        /** The name on the pitch: the surname, unless that's short and the whole name is too ("Vinícius Júnior"). */
+        val short get() = when {
+            lastName.isBlank() -> name
+            lastName.length <= 6 && name.length <= 16 -> name
+            else -> lastName
+        }
+    }
     /** A player who'll miss the game, e.g. ("Rodrygo", "Injury", "Late December 2026"). */
     data class Absence(val name: String, val reason: String, val back: String)
     data class Side(
@@ -151,7 +163,8 @@ object FotMob {
             val rating = p.obj["performance"].obj.str("rating")?.toDoubleOrNull()
             val at = p.obj["verticalLayout"].obj
             p.obj.str("name")?.let {
-                Player(it, p.obj.str("shirtNumber").orEmpty(), rating, at.str("x")?.toFloatOrNull(), at.str("y")?.toFloatOrNull())
+                Player(it, p.obj.str("shirtNumber").orEmpty(), rating, at.str("x")?.toFloatOrNull(), at.str("y")?.toFloatOrNull(),
+                    p.obj.str("id").orEmpty(), p.obj.str("lastName").orEmpty())
             }
         }
         fun side(key: String): Side {

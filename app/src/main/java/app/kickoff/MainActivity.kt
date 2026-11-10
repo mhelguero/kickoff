@@ -114,6 +114,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -541,14 +542,16 @@ private fun HomeScreen(
                     // Played since the start of last week (Sunday), newest first, folded away until tapped.
                     if (ended.isNotEmpty()) {
                         item(key = "ended-header") {
-                            Row(Modifier.fillMaxWidth().clickable { endedOpen = !endedOpen }.padding(top = 8.dp),
+                            // A tinted bar, so it reads as something to tap.
+                            Row(Modifier.fillMaxWidth().padding(top = 8.dp).clip(RoundedCornerShape(12.dp))
+                                .background(MaterialTheme.colorScheme.secondaryContainer)
+                                .clickable { endedOpen = !endedOpen }.padding(horizontal = 16.dp, vertical = 12.dp),
                                 verticalAlignment = Alignment.CenterVertically) {
-                                Text("Ended", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                                Spacer(Modifier.width(8.dp))
-                                Text("since ${endedSince.format(shortDateFmt)}", color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.weight(1f))
+                                Text("Ended", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer, modifier = Modifier.weight(1f))
                                 Icon(if (endedOpen) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                                    if (endedOpen) "Hide ended games" else "Show ended games")
+                                    if (endedOpen) "Hide ended games" else "Show ended games",
+                                    tint = MaterialTheme.colorScheme.onSecondaryContainer)
                             }
                         }
                         if (endedOpen) ended.groupBy { it.zoned().toLocalDate() }.forEach { (day, dayGames) ->
@@ -653,7 +656,6 @@ private fun LiveBadge(label: String) {
     )
 }
 
-private val shortDateFmt = DateTimeFormatter.ofPattern("MMM d")
 
 @Composable
 private fun SectionHeader(title: String) {
@@ -967,23 +969,51 @@ private fun Pitch(starters: List<FotMob.Player>) {
         }
         val ys = starters.mapNotNull { it.y }
         val (lowY, highY) = (ys.minOrNull() ?: 0f) to (ys.maxOrNull() ?: 1f)
-        val markerWidth = maxWidth / 4.3f
-        val top = 14.dp
-        val bottom = 72.dp      // room for the goalkeeper's name and rating under its circle
+        val top = 26.dp         // room for the front line's photos
+        val bottom = 78.dp      // room for the goalkeeper's name and rating under its photo
+        // Each line of the formation (same height on the pitch): a name may be as wide as the gap
+        // to its nearest neighbour, so names in a crowded line wrap instead of overlapping.
+        val lineOf = starters.associateWith { Math.round(it.y!! * 20) }
+        val widthOf = starters.associateWith { p ->
+            val xs = starters.filter { lineOf[it] == lineOf[p] }.map { it.x!! }.sorted()
+            val gap = xs.zipWithNext { a, b -> b - a }.minOrNull() ?: 1f
+            minOf(maxWidth / 4.3f, maxWidth * gap - 4.dp)
+        }
         starters.forEach { p ->
+            val markerWidth = widthOf.getValue(p)
             val depth = if (highY > lowY) (p.y!! - lowY) / (highY - lowY) else 0f
             val centerX = (maxWidth * p.x!!).coerceIn(markerWidth / 2, maxWidth - markerWidth / 2)
             val centerY = maxHeight - bottom - (maxHeight - top - bottom) * depth
             Column(
-                Modifier.width(markerWidth).offset(x = centerX - markerWidth / 2, y = centerY - 15.dp),
+                Modifier.width(markerWidth).offset(x = centerX - markerWidth / 2, y = centerY - 18.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Box(Modifier.size(30.dp).background(Color.White, CircleShape), contentAlignment = Alignment.Center) {
-                    Text(p.number, color = Color(0xFF1B5E20), fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge)
-                }
-                Text(p.name, color = Color.White, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold,
+                PlayerPhoto(p)
+                Text(p.short, color = Color.White, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold,
                     textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 p.rating?.let { RatingBadge(it) }
+            }
+        }
+    }
+}
+
+/** The player's photo in a white circle with the shirt number in a corner; just the number until (or unless) it loads. */
+@Composable
+private fun PlayerPhoto(p: FotMob.Player) {
+    val context = LocalContext.current
+    val photo by produceState<ImageBitmap?>(null, p.id) {
+        if (p.id.isNotBlank()) value = withContext(Dispatchers.IO) { Logos.load(context, p.photo) }
+    }
+    Box(Modifier.size(38.dp)) {
+        Box(Modifier.size(36.dp).align(Alignment.Center).clip(CircleShape).background(Color.White), contentAlignment = Alignment.Center) {
+            val image = photo
+            if (image != null) Image(image, contentDescription = p.name, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+            else Text(p.number, color = Color(0xFF1B5E20), fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge)
+        }
+        if (photo != null && p.number.isNotBlank()) {
+            Box(Modifier.size(16.dp).align(Alignment.BottomEnd).background(Color(0xFF1B5E20), CircleShape),
+                contentAlignment = Alignment.Center) {
+                Text(p.number, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 9.sp)
             }
         }
     }
