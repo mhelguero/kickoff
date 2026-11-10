@@ -19,6 +19,16 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.app.NotificationManagerCompat
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.offset
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -936,6 +946,49 @@ private fun GoalsCard(goals: List<FotMob.Goal>, m: Match) {
     }
 }
 
+/**
+ * A team's starters in formation on a half pitch: goalkeeper at the bottom, attack at the top.
+ * Each player is a shirt-number circle with the name under it, and the rating once played.
+ */
+@Composable
+private fun Pitch(starters: List<FotMob.Player>) {
+    val lines = Color.White.copy(alpha = 0.35f)
+    BoxWithConstraints(
+        Modifier.fillMaxWidth().aspectRatio(0.82f).clip(RoundedCornerShape(10.dp)).background(Color(0xFF2E7D32)),
+    ) {
+        Canvas(Modifier.matchParentSize()) {
+            val stroke = Stroke(width = 2.dp.toPx())
+            val w = size.width; val h = size.height
+            drawRect(lines, style = stroke)
+            // Halfway line's centre circle at the top, penalty and goal areas at the bottom.
+            drawArc(lines, 0f, 180f, false, Offset(w * 0.35f, -w * 0.15f), Size(w * 0.3f, w * 0.3f), style = stroke)
+            drawRect(lines, Offset(w * 0.2f, h * 0.84f), Size(w * 0.6f, h * 0.16f), style = stroke)
+            drawRect(lines, Offset(w * 0.36f, h * 0.94f), Size(w * 0.28f, h * 0.06f), style = stroke)
+        }
+        val ys = starters.mapNotNull { it.y }
+        val (lowY, highY) = (ys.minOrNull() ?: 0f) to (ys.maxOrNull() ?: 1f)
+        val markerWidth = maxWidth / 4.3f
+        val top = 14.dp
+        val bottom = 72.dp      // room for the goalkeeper's name and rating under its circle
+        starters.forEach { p ->
+            val depth = if (highY > lowY) (p.y!! - lowY) / (highY - lowY) else 0f
+            val centerX = (maxWidth * p.x!!).coerceIn(markerWidth / 2, maxWidth - markerWidth / 2)
+            val centerY = maxHeight - bottom - (maxHeight - top - bottom) * depth
+            Column(
+                Modifier.width(markerWidth).offset(x = centerX - markerWidth / 2, y = centerY - 15.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Box(Modifier.size(30.dp).background(Color.White, CircleShape), contentAlignment = Alignment.Center) {
+                    Text(p.number, color = Color(0xFF1B5E20), fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge)
+                }
+                Text(p.name, color = Color.White, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                p.rating?.let { RatingBadge(it) }
+            }
+        }
+    }
+}
+
 /** A FotMob rating, colored like FotMob's: green for good, orange for poor. */
 @Composable
 private fun RatingBadge(rating: Double, big: Boolean = false) {
@@ -993,7 +1046,9 @@ private fun LineupCard(side: FotMob.Side) {
                 Text(side.name, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                 if (side.formation.isNotBlank()) Text(side.formation, fontWeight = FontWeight.Bold)
             }
-            side.starters.forEach { p ->
+            // On a pitch in their formation when FotMob places them, else as a list.
+            if (side.starters.all { it.x != null && it.y != null }) Pitch(side.starters)
+            else side.starters.forEach { p ->
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(p.number, modifier = Modifier.width(32.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(p.name, modifier = Modifier.weight(1f))

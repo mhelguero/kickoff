@@ -77,7 +77,13 @@ object FotMob {
     }
 
     /** [rating]: FotMob's player rating (e.g. 7.2), for players who played in a finished game. */
-    data class Player(val name: String, val number: String = "", val rating: Double? = null)
+    data class Player(
+        val name: String,
+        val number: String = "",
+        val rating: Double? = null,
+        val x: Float? = null,   // place on the pitch, 0 = left to 1 = right (starters)
+        val y: Float? = null,   // 0 = own goal line to 1 = the far end (starters)
+    )
     /** A player who'll miss the game, e.g. ("Rodrygo", "Injury", "Late December 2026"). */
     data class Absence(val name: String, val reason: String, val back: String)
     data class Side(
@@ -143,7 +149,10 @@ object FotMob {
         if (lu == null) return null
         fun players(e: JsonElement?) = e.arr.mapNotNull { p ->
             val rating = p.obj["performance"].obj.str("rating")?.toDoubleOrNull()
-            p.obj.str("name")?.let { Player(it, p.obj.str("shirtNumber").orEmpty(), rating) }
+            val at = p.obj["verticalLayout"].obj
+            p.obj.str("name")?.let {
+                Player(it, p.obj.str("shirtNumber").orEmpty(), rating, at.str("x")?.toFloatOrNull(), at.str("y")?.toFloatOrNull())
+            }
         }
         fun side(key: String): Side {
             val t = lu[key].obj
