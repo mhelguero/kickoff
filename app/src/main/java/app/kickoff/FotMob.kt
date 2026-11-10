@@ -85,6 +85,7 @@ object FotMob {
         val y: Float? = null,   // 0 = own goal line to 1 = the far end (starters)
         val id: String = "",
         val lastName: String = "",
+        val cameOn: Int? = null,  // for subs: the minute they came on, if they did
     ) {
         /** FotMob's photo of the player. */
         val photo get() = "https://images.fotmob.com/image_resources/playerimages/$id.png"
@@ -218,11 +219,13 @@ object FotMob {
     private fun lineups(lu: JsonObject?): Lineups? {
         if (lu == null) return null
         fun players(e: JsonElement?) = e.arr.mapNotNull { p ->
-            val rating = p.obj["performance"].obj.str("rating")?.toDoubleOrNull()
+            val perf = p.obj["performance"].obj
+            val rating = perf.str("rating")?.toDoubleOrNull()
+            val cameOn = perf["substitutionEvents"].arr.map { it.obj }.firstOrNull { it.str("type") == "subIn" }?.str("time")?.toIntOrNull()
             val at = p.obj["verticalLayout"].obj
             p.obj.str("name")?.let {
                 Player(it, p.obj.str("shirtNumber").orEmpty(), rating, at.str("x")?.toFloatOrNull(), at.str("y")?.toFloatOrNull(),
-                    p.obj.str("id").orEmpty(), p.obj.str("lastName").orEmpty())
+                    p.obj.str("id").orEmpty(), p.obj.str("lastName").orEmpty(), cameOn)
             }
         }
         fun side(key: String): Side {

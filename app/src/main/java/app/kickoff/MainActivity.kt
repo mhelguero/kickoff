@@ -1212,18 +1212,20 @@ private fun LineupCard(side: FotMob.Side, best: Double?, tally: Tally) {
                 Spacer(Modifier.height(4.dp))
                 Text("Coach: ${side.coach}", style = MaterialTheme.typography.bodySmall)
             }
-            // Subs who came on (they have a rating), then the rest of the bench.
-            side.bench.filter { it.rating != null }.forEach { p ->
+            // Subs who came on, in the order they did (a late sub may have no rating), then the
+            // rest of the bench.
+            val cameOn = side.bench.filter { it.cameOn != null || it.rating != null }.sortedBy { it.cameOn ?: Int.MAX_VALUE }
+            cameOn.forEach { p ->
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(p.number, modifier = Modifier.width(32.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text("${p.name} (sub)", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("${p.name} (sub${p.cameOn?.let { " $it'" }.orEmpty()})", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Spacer(Modifier.width(4.dp))
                     GoalIcons(p, tally, MaterialTheme.colorScheme.onSurfaceVariant)
                     Spacer(Modifier.weight(1f))
-                    RatingBadge(p.rating!!, best)
+                    p.rating?.let { RatingBadge(it, best) }
                 }
             }
-            val unused = side.bench.filter { it.rating == null }
+            val unused = side.bench.filter { it !in cameOn }
             if (unused.isNotEmpty()) {
                 Text("Bench: " + unused.joinToString(", ") { it.name }, style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
