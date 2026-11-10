@@ -128,13 +128,23 @@ object FotMob {
         val star: Star?,
         val tableLeague: String?,
         val teamIds: List<String>,
+        val leagueId: String?,                 // the competition (its parent for e.g. a group stage)
+        val colors: Map<String, String>,       // FotMob team id -> team color ("#085098")
     )
+
+    /** One knockout tie: the teams, the aggregate score once started, and the winner once decided. */
+    data class Tie(
+        val home: String, val away: String, val homeId: String, val awayId: String,
+        val homeScore: Int?, val awayScore: Int?, val winnerId: String?, val bestOf: Int, val firstGameMillis: Long?,
+    )
+    data class Round(val name: String, val ties: List<Tie>)
 
     /** A game's lineups and absences (injuries, suspensions), or null if FotMob has none. */
     fun lineups(matchId: String): Lineups? = details(matchId).lineups
 
     fun details(matchId: String): Details {
-        val content = get("$BASE/matchDetails?matchId=$matchId").obj["content"].obj
+        val root = get("$BASE/matchDetails?matchId=$matchId").obj
+        val content = root["content"].obj
         val facts = content["matchFacts"].obj
         val goals = facts["events"].obj["events"].arr.map { it.obj }
             .filter { it.str("type") == "Goal" && it.str("isPenaltyShootoutEvent") != "true" }
@@ -154,7 +164,51 @@ object FotMob {
         val table = content["table"].obj
         val tableLeague = (table.str("parentLeagueId") ?: table.str("leagueId"))?.takeIf { table.isNotEmpty() }
         val teamIds = table["teams"].arr.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
-        return Details(lineups(content["lineup"] as? JsonObject), goals, star, tableLeague, teamIds)
+        val general = root["general"].obj
+        val colors = general["teamColors"].obj["lightMode"].obj
+        val homeId = general["homeTeam"].obj.str("id").orEmpty()
+        val awayId = general["awayTeam"].obj.str("id").orEmpty()
+        return Details(lineups(content["lineup"] as? JsonObject), goals, star, tableLeague, teamIds.ifEmpty { listOf(homeId, awayId) },
+            general.str("parentLeagueId") ?: general.str("leagueId"),
+            mapOf(homeId to colors.str("home").orEmpty(), awayId to colors.str("away").orEmpty()).filterValues { it.isNotBlank() })
+    }
+
+    /**
+     * A competition's knockout rounds with the ties whose teams are known (a bracket still all
+     * "TBD" gives nothing). E.g. MLS Cup Playoffs, the Champions League from its knockout phase.
+     */
+    fun knockout(leagueId: String): List<Round> {
+        val rounds = get("$BASE/leagues?id=$leagueId").obj["playoff"].obj["rounds"].arr.map { it.obj }
+        return rounds.mapNotNull { r ->
+            val ties = r["matchups"].arr.map { it.obj }
+                // Only ties whose teams are set: not "TBD", and not one of FotMob's possible pairings
+                // from the current table before a draw ("Manchester United/Galatasaray", two matchups).
+                .filter {
+                    it.str("tbdTeam1") != "true" && it.str("tbdTeam2") != "true" && it.str("hasTwoPossibleMatchups") != "true" &&
+                        (it.str("homeTeamId")?.toIntOrNull() ?: 0) > 0 && (it.str("awayTeamId")?.toIntOrNull() ?: 0) > 0 &&
+                        it.str("homeTeamShortName") != "TBD" && it.str("awayTeamShortName") != "TBD"
+                }
+                .map { t ->
+                    val agg = t["aggregatedResult"].obj
+                    val games = t["matches"].arr.map { it.obj }
+                    val started = games.any { it["status"].obj.str("started") == "true" }
+                    val first = games.mapNotNull { g -> g["status"].obj.str("utcTime")?.let { runCatching { OffsetDateTime.parse(it).toInstant().toEpochMilli() }.getOrNull() } }.minOrNull()
+                    Tie(t.str("homeTeam")!!, t.str("awayTeam")!!, t.str("homeTeamId").orEmpty(), t.str("awayTeamId").orEmpty(),
+                        if (started) agg.str("homeScore")?.toIntOrNull() else null, if (started) agg.str("awayScore")?.toIntOrNull() else null,
+                        t.str("aggregatedWinner") ?: t.str("winner"), t.str("bestOf")?.toIntOrNull()?.coerceAtLeast(1) ?: 1, first)
+                }
+            if (ties.isEmpty()) null else Round(roundName(r.str("stage").orEmpty()), ties)
+        }
+    }
+
+    private fun roundName(stage: String) = when (stage.lowercase()) {
+        "final" -> "Final"
+        "1/2" -> "Semi-finals"
+        "1/4" -> "Quarter-finals"
+        "1/8" -> "Round of 16"
+        "1/16" -> "Round of 32"
+        "playoff" -> "Knockout play-offs"
+        else -> stage.replaceFirstChar { it.uppercase() }
     }
 
     private fun lineups(lu: JsonObject?): Lineups? {

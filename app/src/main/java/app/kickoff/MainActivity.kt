@@ -79,6 +79,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.InputChip
 import androidx.compose.material3.MaterialTheme
@@ -542,16 +543,14 @@ private fun HomeScreen(
                     // Played since the start of last week (Sunday), newest first, folded away until tapped.
                     if (ended.isNotEmpty()) {
                         item(key = "ended-header") {
-                            // A tinted bar, so it reads as something to tap.
-                            Row(Modifier.fillMaxWidth().padding(top = 8.dp).clip(RoundedCornerShape(12.dp))
-                                .background(MaterialTheme.colorScheme.secondaryContainer)
-                                .clickable { endedOpen = !endedOpen }.padding(horizontal = 16.dp, vertical = 12.dp),
-                                verticalAlignment = Alignment.CenterVertically) {
-                                Text("Ended", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.onSecondaryContainer, modifier = Modifier.weight(1f))
-                                Icon(if (endedOpen) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                                    if (endedOpen) "Hide ended games" else "Show ended games",
-                                    tint = MaterialTheme.colorScheme.onSecondaryContainer)
+                            Column(Modifier.fillMaxWidth().clickable { endedOpen = !endedOpen }.padding(top = 8.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text("Ended", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.weight(1f))
+                                    Icon(if (endedOpen) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                        if (endedOpen) "Hide ended games" else "Show ended games")
+                                }
+                                SectionLine()
                             }
                         }
                         if (endedOpen) ended.groupBy { it.zoned().toLocalDate() }.forEach { (day, dayGames) ->
@@ -559,7 +558,7 @@ private fun HomeScreen(
                             items(dayGames, key = { "ended-" + it.id }) { m -> GameCard(m, state.teams) { onOpenMatch(m.id) } }
                         }
                     }
-                    item(key = "upcoming-header") { SectionHeader("Upcoming") }
+                    item(key = "upcoming-header") { Column { SectionHeader("Upcoming"); SectionLine() } }
                     if (upcoming.isEmpty()) item { Hint(if (refreshing) "Loading…" else "No upcoming games found.") }
                     upcoming.groupBy { it.zoned().toLocalDate() }.forEach { (day, dayGames) ->
                         item(key = "day-$day") { DayDivider(dividerFmt.format(day)) }
@@ -656,6 +655,12 @@ private fun LiveBadge(label: String) {
     )
 }
 
+
+/** A full-width line under a section's title (white in dark mode). */
+@Composable
+private fun SectionLine() {
+    HorizontalDivider(Modifier.fillMaxWidth().padding(top = 6.dp), thickness = 1.5.dp, color = MaterialTheme.colorScheme.onSurface)
+}
 
 @Composable
 private fun SectionHeader(title: String) {
@@ -875,9 +880,21 @@ private fun LineupSection(m: Match) {
         if (m.state != "post" || d.tableLeague == null) return@produceState
         value = withContext(Dispatchers.IO) { runCatching { FotMob.table(d.tableLeague, d.teamIds) }.getOrDefault(emptyList()) }
     }
+    // The competition's knockout bracket, if it has one with known teams (any game in it).
+    val knockout by produceState<List<FotMob.Round>>(emptyList(), details?.leagueId) {
+        val league = details?.leagueId ?: return@produceState
+        value = withContext(Dispatchers.IO) { runCatching { FotMob.knockout(league) }.getOrDefault(emptyList()) }
+    }
     val d = details ?: return
+    // The two teams' colors, for their rows in the table and bracket: a followed team's own card
+    // color, else FotMob's color for the team.
+    val teams = Store.state.value.teams
+    val rowColors = d.colors.mapValues { (fid, hex) ->
+        teams.firstOrNull { it.fotmobId == fid }?.let { colorOf(it) }
+            ?: runCatching { Color(android.graphics.Color.parseColor(hex)) }.getOrNull()
+    }.filterValues { it != null }.mapValues { it.value!! }
     if (m.state == "post") {
-        if (d.goals.isNotEmpty()) GoalsCard(d.goals, m)
+        if (d.goals.isNotEmpty()) GoalsCard(d.goals)
         d.star?.let { star ->
             Card(Modifier.fillMaxWidth()) {
                 Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -885,7 +902,6 @@ private fun LineupSection(m: Match) {
                         Text("Player of the match", style = MaterialTheme.typography.labelLarge,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Text(star.name, fontWeight = FontWeight.Bold)
-                        Text(star.team, style = MaterialTheme.typography.bodySmall)
                     }
                     if (star.rating.isNotBlank()) RatingBadge(star.rating.toDoubleOrNull() ?: 0.0, big = true)
                 }
@@ -894,7 +910,8 @@ private fun LineupSection(m: Match) {
     }
     val l = d.lineups
     if (l == null) {
-        if (table.isNotEmpty()) TableCard(table, d.teamIds)
+        if (table.isNotEmpty()) TableCard(table, rowColors)
+        if (knockout.isNotEmpty()) KnockoutCard(knockout, rowColors)
         return
     }
     HorizontalDivider()
@@ -922,12 +939,13 @@ private fun LineupSection(m: Match) {
             }
         }
     }
-    if (table.isNotEmpty()) TableCard(table, d.teamIds)
+    if (table.isNotEmpty()) TableCard(table, rowColors)
+    if (knockout.isNotEmpty()) KnockoutCard(knockout, rowColors)
 }
 
 /** The goals in order: home team's on the left, away team's on the right, with assists. */
 @Composable
-private fun GoalsCard(goals: List<FotMob.Goal>, m: Match) {
+private fun GoalsCard(goals: List<FotMob.Goal>) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Goals", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
@@ -942,8 +960,6 @@ private fun GoalsCard(goals: List<FotMob.Goal>, m: Match) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
-            Text("${m.home} left • ${m.away} right", style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -1037,30 +1053,71 @@ private fun RatingBadge(rating: Double, big: Boolean = false) {
     )
 }
 
-/** The league table: the rows around each team in the game, theirs in bold. */
+/**
+ * The whole table of the teams' league, or of their group/conference when it has several. The
+ * game's two teams' rows are filled with their colors.
+ */
 @Composable
-private fun TableCard(rows: List<FotMob.TableRow>, teamIds: List<String>) {
-    // Two places either side of each team, so a long table (36 in the Champions League) stays short.
-    val near = rows.indices.filter { i -> rows.indices.any { j -> rows[j].teamId in teamIds && kotlin.math.abs(i - j) <= 2 } }
+private fun TableCard(rows: List<FotMob.TableRow>, colors: Map<String, Color>) {
     Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text("Table", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-            Row {
+        Column(Modifier.padding(vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text("Table", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(horizontal = 16.dp))
+            Row(Modifier.padding(horizontal = 16.dp)) {
                 Text("#", Modifier.width(28.dp), style = MaterialTheme.typography.labelMedium)
                 Text("Team", Modifier.weight(1f), style = MaterialTheme.typography.labelMedium)
                 listOf("P", "GD", "Pts").forEach { Text(it, Modifier.width(36.dp), style = MaterialTheme.typography.labelMedium) }
             }
-            near.forEachIndexed { k, i ->
-                if (k > 0 && i != near[k - 1] + 1) Text("…", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                val r = rows[i]
-                val ours = r.teamId in teamIds
-                val w = if (ours) FontWeight.Bold else null
-                Row {
-                    Text("${r.pos}", Modifier.width(28.dp), fontWeight = w)
-                    Text(r.team, Modifier.weight(1f), fontWeight = w)
-                    Text("${r.played}", Modifier.width(36.dp), fontWeight = w)
-                    Text(if (r.goalDiff > 0) "+${r.goalDiff}" else "${r.goalDiff}", Modifier.width(36.dp), fontWeight = w)
-                    Text("${r.points}", Modifier.width(36.dp), fontWeight = FontWeight.Bold)
+            rows.forEach { r ->
+                val fill = colors[r.teamId]
+                val ink = if (fill != null) contentOn(fill) else LocalContentColor.current
+                val w = if (fill != null) FontWeight.Bold else null
+                Row(Modifier.fillMaxWidth().background(fill ?: Color.Transparent).padding(horizontal = 16.dp, vertical = 3.dp)) {
+                    Text("${r.pos}", Modifier.width(28.dp), fontWeight = w, color = ink)
+                    Text(r.team, Modifier.weight(1f), fontWeight = w, color = ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("${r.played}", Modifier.width(36.dp), fontWeight = w, color = ink)
+                    Text(if (r.goalDiff > 0) "+${r.goalDiff}" else "${r.goalDiff}", Modifier.width(36.dp), fontWeight = w, color = ink)
+                    Text("${r.points}", Modifier.width(36.dp), fontWeight = FontWeight.Bold, color = ink)
+                }
+            }
+        }
+    }
+}
+
+/** The knockout rounds: each tie with its score once started (winner in bold), else its first date. */
+@Composable
+private fun KnockoutCard(rounds: List<FotMob.Round>, colors: Map<String, Color>) {
+    val dateFmt = remember { DateTimeFormatter.ofPattern("EEE, MMM d") }
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("Knockout", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(horizontal = 16.dp))
+            rounds.forEach { round ->
+                Text(round.name, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+                round.ties.forEach { t ->
+                    // A tie with one of the game's teams is filled with that team's color (the followed
+                    // team's when both are in it).
+                    val followed = Store.state.value.teams.map { it.fotmobId }
+                    val inTie = listOf(t.homeId, t.awayId).filter { it in colors }
+                    val fill = (inTie.firstOrNull { it in followed } ?: inTie.firstOrNull())?.let { colors[it] }
+                    val ink = if (fill != null) contentOn(fill) else LocalContentColor.current
+                    Column(Modifier.fillMaxWidth().background(fill ?: Color.Transparent).padding(horizontal = 16.dp, vertical = 4.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(t.home, Modifier.weight(1f), color = ink, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                fontWeight = if (t.winnerId == t.homeId) FontWeight.Bold else null)
+                            Text(if (t.homeScore != null) "${t.homeScore} – ${t.awayScore}" else "vs", color = ink,
+                                fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 8.dp))
+                            Text(t.away, Modifier.weight(1f), color = ink, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                textAlign = TextAlign.End, fontWeight = if (t.winnerId == t.awayId) FontWeight.Bold else null)
+                        }
+                        val note = listOfNotNull(
+                            if (t.bestOf > 1) "Best of ${t.bestOf}" else null,
+                            if (t.homeScore == null) t.firstGameMillis?.let { dateFmt.format(Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault())) } else null,
+                        ).joinToString(Streaming.DOT)
+                        if (note.isNotBlank()) Text(note, style = MaterialTheme.typography.bodySmall, color = ink.copy(alpha = 0.8f),
+                            modifier = Modifier.align(Alignment.CenterHorizontally))
+                    }
                 }
             }
         }
