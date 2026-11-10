@@ -23,6 +23,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.LineHeightStyle
+import androidx.compose.ui.text.PlatformTextStyle
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.Offset
@@ -907,7 +910,12 @@ private fun LineupSection(m: Match) {
         Text("Lineups", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
         // The game's best rating (both teams, subs too) is the one shown in blue.
         val best = listOf(l.home, l.away).flatMap { it.starters + it.bench }.mapNotNull { it.rating }.maxOrNull()
-        listOf(l.home, l.away).forEach { side -> LineupCard(side, best) }
+        // Goals (own goals aside) and assists per player, for the ball and boot icons.
+        val tally = Tally(
+            d.goals.filter { it.note != "OG" && it.scorerId.isNotBlank() }.groupingBy { it.scorerId }.eachCount(),
+            d.goals.filter { it.assistId.isNotBlank() }.groupingBy { it.assistId }.eachCount(),
+        )
+        listOf(l.home, l.away).forEach { side -> LineupCard(side, best, tally) }
     } else if (m.state == "pre") {
         Text("Lineups are announced about an hour before kickoff.", color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
@@ -967,7 +975,7 @@ private fun GoalsCard(goals: List<FotMob.Goal>) {
  * Each player is a shirt-number circle with the name under it, and the rating once played.
  */
 @Composable
-private fun Pitch(starters: List<FotMob.Player>, best: Double?) {
+private fun Pitch(starters: List<FotMob.Player>, best: Double?, tally: Tally) {
     val lines = Color.White.copy(alpha = 0.35f)
     val top = 26.dp         // room for the front line's photos
     val bottom = 78.dp      // room for the goalkeeper's name and rating under its photo
@@ -1009,9 +1017,26 @@ private fun Pitch(starters: List<FotMob.Player>, best: Double?) {
                 PlayerPhoto(p)
                 Text(p.short, color = Color.White, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold,
                     textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                p.rating?.let { RatingBadge(it, best) }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                    p.rating?.let { RatingBadge(it, best) }
+                    GoalIcons(p, tally, Color.White)
+                }
             }
         }
+    }
+}
+
+/** Goals and assists per FotMob player id. */
+private data class Tally(val goals: Map<String, Int>, val assists: Map<String, Int>)
+
+/** A ball per goal and a boot per assist, like the goals list. */
+@Composable
+private fun GoalIcons(p: FotMob.Player, tally: Tally, bootTint: Color) {
+    repeat(tally.goals[p.id] ?: 0) {
+        Image(painterResource(R.drawable.ball), contentDescription = "Goal", modifier = Modifier.size(14.dp))
+    }
+    repeat(tally.assists[p.id] ?: 0) {
+        Icon(painterResource(R.drawable.ic_cleats), contentDescription = "Assist", modifier = Modifier.size(14.dp), tint = bootTint)
     }
 }
 
@@ -1029,9 +1054,12 @@ private fun PlayerPhoto(p: FotMob.Player) {
             else Text(p.number, color = Color(0xFF1B5E20), fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge)
         }
         if (photo != null && p.number.isNotBlank()) {
-            Box(Modifier.size(16.dp).align(Alignment.BottomEnd).background(Color(0xFF1B5E20), CircleShape),
+            Box(Modifier.size(17.dp).align(Alignment.BottomEnd).background(Color(0xFF1B5E20), CircleShape),
                 contentAlignment = Alignment.Center) {
-                Text(p.number, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 9.sp)
+                // No font padding and a line exactly as tall as the digits, so they sit in the middle.
+                Text(p.number, color = Color.White, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center,
+                    style = TextStyle(fontSize = 9.sp, lineHeight = 9.sp, platformStyle = PlatformTextStyle(includeFontPadding = false),
+                        lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.Both)))
             }
         }
     }
@@ -1128,7 +1156,7 @@ private fun KnockoutCard(rounds: List<FotMob.Round>, colors: Map<String, Color>)
 
 /** One team's starting XI with shirt numbers, then its coach and bench. */
 @Composable
-private fun LineupCard(side: FotMob.Side, best: Double?) {
+private fun LineupCard(side: FotMob.Side, best: Double?, tally: Tally) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1136,11 +1164,14 @@ private fun LineupCard(side: FotMob.Side, best: Double?) {
                 if (side.formation.isNotBlank()) Text(side.formation, fontWeight = FontWeight.Bold)
             }
             // On a pitch in their formation when FotMob places them, else as a list.
-            if (side.starters.all { it.x != null && it.y != null }) Pitch(side.starters, best)
+            if (side.starters.all { it.x != null && it.y != null }) Pitch(side.starters, best, tally)
             else side.starters.forEach { p ->
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(p.number, modifier = Modifier.width(32.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(p.name, modifier = Modifier.weight(1f))
+                    Text(p.name)
+                    Spacer(Modifier.width(4.dp))
+                    GoalIcons(p, tally, LocalContentColor.current)
+                    Spacer(Modifier.weight(1f))
                     // Finished games: each player's FotMob rating.
                     p.rating?.let { RatingBadge(it, best) }
                 }
@@ -1153,7 +1184,10 @@ private fun LineupCard(side: FotMob.Side, best: Double?) {
             side.bench.filter { it.rating != null }.forEach { p ->
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(p.number, modifier = Modifier.width(32.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text("${p.name} (sub)", modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("${p.name} (sub)", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.width(4.dp))
+                    GoalIcons(p, tally, MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.weight(1f))
                     RatingBadge(p.rating!!, best)
                 }
             }

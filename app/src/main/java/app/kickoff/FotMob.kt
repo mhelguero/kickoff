@@ -112,7 +112,10 @@ object FotMob {
     }
 
     /** A goal: minute ("90+3'"), scorer, assist (may be ""), which side, and "pen" / "OG" if so. */
-    data class Goal(val minute: String, val scorer: String, val assist: String, val home: Boolean, val note: String)
+    data class Goal(
+        val minute: String, val scorer: String, val assist: String, val home: Boolean, val note: String,
+        val scorerId: String = "", val assistId: String = "",
+    )
     data class Star(val name: String, val team: String, val rating: String)
     /** One table row: position, team, games played, goal difference, points. */
     data class TableRow(val pos: Int, val team: String, val teamId: String, val played: Int, val goalDiff: Int, val points: Int)
@@ -157,7 +160,8 @@ object FotMob {
                     else -> ""
                 }
                 Goal(minute, e.str("nameStr") ?: e["player"].obj.str("name").orEmpty(),
-                    e.str("assistStr").orEmpty().removePrefix("assist by ").trim(), e.str("isHome") == "true", note)
+                    e.str("assistStr").orEmpty().removePrefix("assist by ").trim(), e.str("isHome") == "true", note,
+                    e.str("playerId").orEmpty(), e.str("assistPlayerId").orEmpty())
             }
         val potm = facts["playerOfTheMatch"].obj
         val star = potm["name"].obj.str("fullName")?.let { Star(it, potm.str("teamName").orEmpty(), potm["rating"].obj.str("num").orEmpty()) }
