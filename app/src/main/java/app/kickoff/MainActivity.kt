@@ -895,18 +895,6 @@ private fun LineupSection(m: Match) {
     }.filterValues { it != null }.mapValues { it.value!! }
     if (m.state == "post") {
         if (d.goals.isNotEmpty()) GoalsCard(d.goals)
-        d.star?.let { star ->
-            Card(Modifier.fillMaxWidth()) {
-                Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("Player of the match", style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text(star.name, fontWeight = FontWeight.Bold)
-                    }
-                    if (star.rating.isNotBlank()) RatingBadge(star.rating.toDoubleOrNull() ?: 0.0, big = true)
-                }
-            }
-        }
     }
     val l = d.lineups
     if (l == null) {
@@ -917,7 +905,9 @@ private fun LineupSection(m: Match) {
     HorizontalDivider()
     if (l.announced) {
         Text("Lineups", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-        listOf(l.home, l.away).forEach { side -> LineupCard(side) }
+        // The game's best rating (both teams, subs too) is the one shown in blue.
+        val best = listOf(l.home, l.away).flatMap { it.starters + it.bench }.mapNotNull { it.rating }.maxOrNull()
+        listOf(l.home, l.away).forEach { side -> LineupCard(side, best) }
     } else if (m.state == "pre") {
         Text("Lineups are announced about an hour before kickoff.", color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
@@ -955,9 +945,17 @@ private fun GoalsCard(goals: List<FotMob.Goal>) {
                     if (g.note.isNotBlank()) append(" (${g.note})")
                 }
                 Column(Modifier.fillMaxWidth(), horizontalAlignment = if (g.home) Alignment.Start else Alignment.End) {
-                    Text("${g.minute}  $text", fontWeight = FontWeight.Bold)
-                    if (g.assist.isNotBlank()) Text("Assist: ${g.assist}", style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Image(painterResource(R.drawable.ball), contentDescription = "Goal", modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("${g.minute}  $text", fontWeight = FontWeight.Bold)
+                    }
+                    if (g.assist.isNotBlank()) Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(painterResource(R.drawable.ic_cleats), contentDescription = "Assist", modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Spacer(Modifier.width(6.dp))
+                        Text(g.assist, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
             }
         }
@@ -969,10 +967,17 @@ private fun GoalsCard(goals: List<FotMob.Goal>) {
  * Each player is a shirt-number circle with the name under it, and the rating once played.
  */
 @Composable
-private fun Pitch(starters: List<FotMob.Player>) {
+private fun Pitch(starters: List<FotMob.Player>, best: Double?) {
     val lines = Color.White.copy(alpha = 0.35f)
+    val top = 26.dp         // room for the front line's photos
+    val bottom = 78.dp      // room for the goalkeeper's name and rating under its photo
+    // Each line of the formation (same height on the pitch), from the goalkeeper up. The pitch is
+    // tall enough for a photo, a two-line name and a rating per line, so lines never overlap.
+    val lineOf = starters.associateWith { Math.round(it.y!! * 20) }
+    val lineCount = lineOf.values.distinct().size
     BoxWithConstraints(
-        Modifier.fillMaxWidth().aspectRatio(0.82f).clip(RoundedCornerShape(10.dp)).background(Color(0xFF2E7D32)),
+        Modifier.fillMaxWidth().height(top + bottom + 96.dp * (lineCount - 1).coerceAtLeast(1))
+            .clip(RoundedCornerShape(10.dp)).background(Color(0xFF2E7D32)),
     ) {
         Canvas(Modifier.matchParentSize()) {
             val stroke = Stroke(width = 2.dp.toPx())
@@ -985,11 +990,8 @@ private fun Pitch(starters: List<FotMob.Player>) {
         }
         val ys = starters.mapNotNull { it.y }
         val (lowY, highY) = (ys.minOrNull() ?: 0f) to (ys.maxOrNull() ?: 1f)
-        val top = 26.dp         // room for the front line's photos
-        val bottom = 78.dp      // room for the goalkeeper's name and rating under its photo
-        // Each line of the formation (same height on the pitch): a name may be as wide as the gap
-        // to its nearest neighbour, so names in a crowded line wrap instead of overlapping.
-        val lineOf = starters.associateWith { Math.round(it.y!! * 20) }
+        // A name may be as wide as the gap to its nearest neighbour in its line, so names in a
+        // crowded line wrap instead of overlapping.
         val widthOf = starters.associateWith { p ->
             val xs = starters.filter { lineOf[it] == lineOf[p] }.map { it.x!! }.sorted()
             val gap = xs.zipWithNext { a, b -> b - a }.minOrNull() ?: 1f
@@ -1007,7 +1009,7 @@ private fun Pitch(starters: List<FotMob.Player>) {
                 PlayerPhoto(p)
                 Text(p.short, color = Color.White, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold,
                     textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                p.rating?.let { RatingBadge(it) }
+                p.rating?.let { RatingBadge(it, best) }
             }
         }
     }
@@ -1035,11 +1037,11 @@ private fun PlayerPhoto(p: FotMob.Player) {
     }
 }
 
-/** A FotMob rating, colored like FotMob's: green for good, orange for poor. */
+/** A FotMob rating: blue for the game's best ([best]), green for good, orange and red for poor. */
 @Composable
-private fun RatingBadge(rating: Double, big: Boolean = false) {
+private fun RatingBadge(rating: Double, best: Double?, big: Boolean = false) {
     val color = when {
-        rating >= 8.0 -> Color(0xFF1E88E5)
+        best != null && rating >= best -> Color(0xFF1E88E5)
         rating >= 7.0 -> Color(0xFF2E9E4F)
         rating >= 6.0 -> Color(0xFFF2A600)
         else -> Color(0xFFE5533D)
@@ -1126,7 +1128,7 @@ private fun KnockoutCard(rounds: List<FotMob.Round>, colors: Map<String, Color>)
 
 /** One team's starting XI with shirt numbers, then its coach and bench. */
 @Composable
-private fun LineupCard(side: FotMob.Side) {
+private fun LineupCard(side: FotMob.Side, best: Double?) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1134,13 +1136,13 @@ private fun LineupCard(side: FotMob.Side) {
                 if (side.formation.isNotBlank()) Text(side.formation, fontWeight = FontWeight.Bold)
             }
             // On a pitch in their formation when FotMob places them, else as a list.
-            if (side.starters.all { it.x != null && it.y != null }) Pitch(side.starters)
+            if (side.starters.all { it.x != null && it.y != null }) Pitch(side.starters, best)
             else side.starters.forEach { p ->
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(p.number, modifier = Modifier.width(32.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(p.name, modifier = Modifier.weight(1f))
                     // Finished games: each player's FotMob rating.
-                    p.rating?.let { RatingBadge(it) }
+                    p.rating?.let { RatingBadge(it, best) }
                 }
             }
             if (side.coach.isNotBlank()) {
@@ -1152,7 +1154,7 @@ private fun LineupCard(side: FotMob.Side) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(p.number, modifier = Modifier.width(32.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text("${p.name} (sub)", modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    RatingBadge(p.rating!!)
+                    RatingBadge(p.rating!!, best)
                 }
             }
             val unused = side.bench.filter { it.rating == null }
