@@ -821,6 +821,78 @@ private fun MatchScreen(m: Match, onBack: () -> Unit) {
                 Spacer(Modifier.width(8.dp))
                 Text("Search for other ways to watch")
             }
+            LineupSection(m)
+        }
+    }
+}
+
+/**
+ * Lineups once announced (FotMob gets them about an hour before kickoff), and who's out (injuries,
+ * suspensions) as soon as FotMob knows. Nothing at all when FotMob has neither (e.g. Bolivian games).
+ * Close to kickoff, checked again every 2 minutes until the lineups are in.
+ */
+@Composable
+private fun LineupSection(m: Match) {
+    val lineups by produceState<FotMob.Lineups?>(null, m.fotmobId) {
+        if (m.fotmobId.isBlank()) return@produceState
+        while (true) {
+            withContext(Dispatchers.IO) { runCatching { FotMob.lineups(m.fotmobId) }.getOrNull() }?.let { value = it }
+            val soon = m.state != "post" && System.currentTimeMillis() > m.dateMillis - 3 * 60 * 60 * 1000L
+            if (value?.announced == true || !soon) break
+            delay(2 * 60 * 1000L)
+        }
+    }
+    val l = lineups ?: return
+    HorizontalDivider()
+    if (l.announced) {
+        Text("Lineups", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        listOf(l.home, l.away).forEach { side -> LineupCard(side) }
+    } else if (m.state == "pre") {
+        Text("Lineups are announced about an hour before kickoff.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+    if (l.anyOut) {
+        Text("Out", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        listOf(l.home, l.away).filter { it.out.isNotEmpty() }.forEach { side ->
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(side.name, fontWeight = FontWeight.Bold)
+                    side.out.forEach { a ->
+                        Row {
+                            Text(a.name, modifier = Modifier.weight(1f))
+                            // e.g. "Injury • Late December 2026"
+                            Text(listOf(a.reason, a.back).filter { it.isNotBlank() }.joinToString(Streaming.DOT),
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** One team's starting XI with shirt numbers, then its coach and bench. */
+@Composable
+private fun LineupCard(side: FotMob.Side) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(side.name, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                if (side.formation.isNotBlank()) Text(side.formation, fontWeight = FontWeight.Bold)
+            }
+            side.starters.forEach { p ->
+                Row {
+                    Text(p.number, modifier = Modifier.width(32.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(p.name)
+                }
+            }
+            if (side.coach.isNotBlank()) {
+                Spacer(Modifier.height(4.dp))
+                Text("Coach: ${side.coach}", style = MaterialTheme.typography.bodySmall)
+            }
+            if (side.bench.isNotEmpty()) {
+                Text("Bench: " + side.bench.joinToString(", ") { it.name }, style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
     }
 }

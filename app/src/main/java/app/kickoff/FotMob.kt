@@ -76,6 +76,42 @@ object FotMob {
             .distinct()
     }
 
+    data class Player(val name: String, val number: String = "")
+    /** A player who'll miss the game, e.g. ("Rodrygo", "Injury", "Late December 2026"). */
+    data class Absence(val name: String, val reason: String, val back: String)
+    data class Side(
+        val name: String,
+        val formation: String,
+        val starters: List<Player>,   // empty until the lineups are announced (about an hour before)
+        val bench: List<Player>,
+        val coach: String,
+        val out: List<Absence>,
+    )
+    data class Lineups(val home: Side, val away: Side) {
+        val announced get() = home.starters.isNotEmpty() || away.starters.isNotEmpty()
+        val anyOut get() = home.out.isNotEmpty() || away.out.isNotEmpty()
+    }
+
+    /** A game's lineups and absences (injuries, suspensions), or null if FotMob has none. */
+    fun lineups(matchId: String): Lineups? {
+        val lu = get("$BASE/matchDetails?matchId=$matchId").obj["content"].obj["lineup"] as? JsonObject ?: return null
+        fun players(e: JsonElement?) = e.arr.mapNotNull { p ->
+            p.obj.str("name")?.let { Player(it, p.obj.str("shirtNumber").orEmpty()) }
+        }
+        fun side(key: String): Side {
+            val t = lu[key].obj
+            val out = t["unavailable"].arr.mapNotNull { p ->
+                val name = p.obj.str("name") ?: return@mapNotNull null
+                val u = p.obj["unavailability"].obj
+                val type = u.str("type").orEmpty().replace('_', ' ').replaceFirstChar { it.uppercase() }
+                Absence(name, type, u.str("expectedReturn").orEmpty())
+            }
+            return Side(t.str("name").orEmpty(), t.str("formation").orEmpty(), players(t["starters"]), players(t["subs"]),
+                t["coach"].obj.str("name").orEmpty(), out)
+        }
+        return Lineups(side("homeTeam"), side("awayTeam")).takeIf { it.announced || it.anyOut }
+    }
+
     private val GENERIC = setOf("fc", "cf", "sc", "cd", "club", "deportivo", "atletico", "real", "united", "city")
 
     /** The team's games this season, past, live and upcoming. */
