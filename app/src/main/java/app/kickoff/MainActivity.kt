@@ -1007,16 +1007,20 @@ private fun GoalsCard(goals: List<FotMob.Goal>) {
  * Each player is a shirt-number circle with the name under it, and the rating once played.
  */
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 private fun Pitch(starters: List<FotMob.Player>, best: Double?, tally: Tally) {
     val lines = Color.White.copy(alpha = 0.35f)
-    val top = 26.dp         // room for the front line's photos
-    val bottom = 78.dp      // room for the goalkeeper's name and rating under its photo
+    // A player with two or more goals and assists may need a second row of icons under the rating
+    // (icons stay full size and wrap rather than shrink), so the pitch makes room for it.
+    val extraRow = if (starters.any { (tally.goals[it.id] ?: 0) + (tally.assists[it.id] ?: 0) >= 2 }) 16.dp else 0.dp
+    val top = 26.dp                // room for the front line's photos
+    val bottom = 78.dp + extraRow  // room for the goalkeeper's name and rating under its photo
     // Each line of the formation (same height on the pitch), from the goalkeeper up. The pitch is
     // tall enough for a photo, a two-line name and a rating per line, so lines never overlap.
     val lineOf = starters.associateWith { Math.round(it.y!! * 20) }
     val lineCount = lineOf.values.distinct().size
     BoxWithConstraints(
-        Modifier.fillMaxWidth().height(top + bottom + 96.dp * (lineCount - 1).coerceAtLeast(1))
+        Modifier.fillMaxWidth().height(top + bottom + (96.dp + extraRow) * (lineCount - 1).coerceAtLeast(1))
             .clip(RoundedCornerShape(10.dp)).background(Color(0xFF2E7D32)),
     ) {
         Canvas(Modifier.matchParentSize()) {
@@ -1049,9 +1053,13 @@ private fun Pitch(starters: List<FotMob.Player>, best: Double?, tally: Tally) {
                 PlayerPhoto(p)
                 Text(p.short, color = Color.White, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold,
                     textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                    p.rating?.let { RatingBadge(it, best) }
-                    GoalIcons(p, tally, Color.White)
+                // Icons that don't fit beside the rating go on the next row, at full size.
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(2.dp, Alignment.CenterHorizontally),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    p.rating?.let { RatingBadge(it, best, Modifier.align(Alignment.CenterVertically)) }
+                    GoalIcons(p, tally, Color.White, Modifier.align(Alignment.CenterVertically))
                 }
             }
         }
@@ -1063,12 +1071,12 @@ private data class Tally(val goals: Map<String, Int>, val assists: Map<String, I
 
 /** A ball per goal and a boot per assist, like the goals list. */
 @Composable
-private fun GoalIcons(p: FotMob.Player, tally: Tally, bootTint: Color) {
+private fun GoalIcons(p: FotMob.Player, tally: Tally, bootTint: Color, modifier: Modifier = Modifier) {
     repeat(tally.goals[p.id] ?: 0) {
-        Image(painterResource(R.drawable.ball), contentDescription = "Goal", modifier = Modifier.size(14.dp))
+        Image(painterResource(R.drawable.ball), contentDescription = "Goal", modifier = modifier.size(14.dp))
     }
     repeat(tally.assists[p.id] ?: 0) {
-        Icon(painterResource(R.drawable.ic_cleats), contentDescription = "Assist", modifier = Modifier.size(14.dp), tint = bootTint)
+        Icon(painterResource(R.drawable.ic_cleats), contentDescription = "Assist", modifier = modifier.size(14.dp), tint = bootTint)
     }
 }
 
@@ -1099,7 +1107,7 @@ private fun PlayerPhoto(p: FotMob.Player) {
 
 /** A FotMob rating: blue for the game's best ([best]), green for good, orange and red for poor. */
 @Composable
-private fun RatingBadge(rating: Double, best: Double?, big: Boolean = false) {
+private fun RatingBadge(rating: Double, best: Double?, modifier: Modifier = Modifier, big: Boolean = false) {
     val color = when {
         best != null && rating >= best -> Color(0xFF1E88E5)
         rating >= 7.0 -> Color(0xFF2E9E4F)
@@ -1111,7 +1119,7 @@ private fun RatingBadge(rating: Double, best: Double?, big: Boolean = false) {
         color = Color.White,
         fontWeight = FontWeight.Bold,
         style = if (big) MaterialTheme.typography.titleMedium else MaterialTheme.typography.labelMedium,
-        modifier = Modifier.background(color, RoundedCornerShape(6.dp)).padding(horizontal = 6.dp, vertical = 2.dp),
+        modifier = modifier.background(color, RoundedCornerShape(6.dp)).padding(horizontal = 6.dp, vertical = 2.dp),
     )
 }
 
@@ -1200,10 +1208,12 @@ private fun LineupCard(side: FotMob.Side, best: Double?, tally: Tally) {
             else side.starters.forEach { p ->
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(p.number, modifier = Modifier.width(32.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(p.name)
-                    Spacer(Modifier.width(4.dp))
-                    GoalIcons(p, tally, LocalContentColor.current)
-                    Spacer(Modifier.weight(1f))
+                    // The name wraps before the icons shrink.
+                    Row(Modifier.weight(1f).padding(end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(p.name, modifier = Modifier.weight(1f, fill = false))
+                        Spacer(Modifier.width(4.dp))
+                        GoalIcons(p, tally, LocalContentColor.current)
+                    }
                     // Finished games: each player's FotMob rating.
                     p.rating?.let { RatingBadge(it, best) }
                 }
@@ -1218,10 +1228,12 @@ private fun LineupCard(side: FotMob.Side, best: Double?, tally: Tally) {
             cameOn.forEach { p ->
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(p.number, modifier = Modifier.width(32.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text("${p.name} (sub${p.cameOn?.let { " $it'" }.orEmpty()})", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(Modifier.width(4.dp))
-                    GoalIcons(p, tally, MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(Modifier.weight(1f))
+                    Row(Modifier.weight(1f).padding(end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("${p.name} (sub${p.cameOn?.let { " $it'" }.orEmpty()})", color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f, fill = false))
+                        Spacer(Modifier.width(4.dp))
+                        GoalIcons(p, tally, MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                     p.rating?.let { RatingBadge(it, best) }
                 }
             }
