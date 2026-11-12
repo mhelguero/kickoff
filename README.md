@@ -9,9 +9,12 @@ Match data and US broadcasters come from ESPN's public site API. Bolivian league
 
 ## Demo
 
-[Watch the demo video (39 s)](docs/demo.mp4): the games list, a finished game's page (goals,
+<img src="docs/demo.gif" width="360" alt="Kickoff demo">
+
+The games list, a finished game's page (goals,
 lineups in formation with ratings, subs, the league table), going back to the same spot, an
 upcoming game's page, and team news. Recorded from the real app with real data.
+[Full-size video (MP4)](https://github.com/mhelguero/kickoff/raw/main/docs/demo.mp4).
 
 ## Get the app on your phone
 
