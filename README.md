@@ -7,6 +7,12 @@ alert shows where the game is on; streaming apps installed on your phone get an 
 Match data and US broadcasters come from ESPN's public site API. Bolivian league games show Entel Gol
 (the exclusive rights holder), and each game links to Live Soccer TV for channels in every country.
 
+## Demo
+
+[Watch the demo video (39 s)](docs/demo.mp4): the games list, a finished game's page (goals,
+lineups in formation with ratings, subs, the league table), going back to the same spot, an
+upcoming game's page, and team news. Recorded from the real app with real data.
+
 ## Get the app on your phone
 
 Every push to `main` builds the APK on GitHub Actions and publishes it as the latest release.
