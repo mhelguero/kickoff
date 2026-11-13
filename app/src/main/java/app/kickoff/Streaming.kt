@@ -68,14 +68,23 @@ object Streaming {
     const val BOLIVIA = "BO"
 
     /**
-     * FotMob's US channels and streaming services for a game, e.g. TUDN, ViX, Paramount+; with none,
-     * the Bolivian channel if it's a Bolivian game that has one (e.g. Entel Gol).
+     * FotMob's US channels and streaming services for a game, e.g. TUDN, ViX, Paramount+; for a
+     * national-team game, then each playing country's own channels (followed team's country first,
+     * see NationalTv). With none of those, the Bolivian channel if it's a Bolivian game that has one
+     * (e.g. Entel Gol).
      */
     fun channels(match: Match): List<Channel> {
-        val us = match.tv[COUNTRY].orEmpty()
-        val (names, country) = if (us.isNotEmpty()) us to COUNTRY else match.tv[BOLIVIA].orEmpty() to BOLIVIA
-        return names.map { shortName(it) }.distinct().map { Channel(it, country) }
+        fun list(country: String) = match.tv[country].orEmpty().map { shortName(it) }.distinct().map { Channel(it, country) }
+        val shown = list(COUNTRY) + NationalTv.countriesIn(match, Store.state.value.teams).flatMap { list(it.code) }
+        return shown.ifEmpty { list(BOLIVIA) }
     }
+
+    /**
+     * A channel's name with its country's flag in front, unless it's a US channel: "🇧🇴 Unitel". A
+     * no-break space keeps the flag on the same line as the name when a card's list wraps.
+     */
+    fun label(channel: Channel): String =
+        if (channel.country == COUNTRY) channel.name else NationalTv.flag(channel.country) + "\u00A0" + channel.name
 
     /**
      * Shorter, combined names: ESPN Select (formerly ESPN+) shows as "ESPN+"; ESPN Deportes,
@@ -93,12 +102,8 @@ object Streaming {
         }
     }
 
-    /** Short text for notifications and game cards, e.g. "TUDN, ViX, Paramount+". */
-    fun summary(match: Match, separator: String = ", "): String {
-        val list = channels(match)
-        // Bolivian channels say so: they're shown in Bolivia, not the US.
-        return list.joinToString(separator) { it.name } + if (list.any { it.country == BOLIVIA }) " (Bolivia)" else ""
-    }
+    /** Short text for notifications and game cards, e.g. "TUDN, ViX, Paramount+, 🇧🇴 Unitel". */
+    fun summary(match: Match, separator: String = ", "): String = channels(match).joinToString(separator) { label(it) }
 
     /** Slow (reads every installed app's name): call off the main thread. */
     fun options(context: Context, channels: List<Channel>, match: Match? = null): List<WatchOption> {

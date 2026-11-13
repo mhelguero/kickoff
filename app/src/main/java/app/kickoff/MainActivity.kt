@@ -846,7 +846,7 @@ private fun scoreLine(m: Match) =
 private fun MatchScreen(m: Match, onBack: () -> Unit) {
     val context = LocalContext.current
     // ESPN and ESPN+ are one app, so one row here (cards still list both).
-    val channels = Streaming.channels(m).map { if (it.name == "ESPN+") it.copy(name = "ESPN") else it }.distinctBy { it.name }
+    val channels = Streaming.channels(m).map { if (it.name == "ESPN+") it.copy(name = "ESPN") else it }.distinct()
     Scaffold(
         topBar = {
             TopAppBar(
@@ -869,7 +869,8 @@ private fun MatchScreen(m: Match, onBack: () -> Unit) {
                 HorizontalDivider()
                 if (channels.isEmpty()) Text("No US channel listed for this game yet.")
                 else {
-                    if (channels.any { it.country == Streaming.BOLIVIA }) Text("No US channel listed. Shown in Bolivia on:")
+                    // Other countries' channels carry their flag; say so when there's no US one.
+                    if (channels.none { it.country == Streaming.COUNTRY }) Text("No US channel listed yet. Shown in other countries on:")
                     ChannelCards(channels, m)
                 }
                 TextButton(onClick = { Streaming.openUrl(context, Streaming.findMoreUrl(m)) }) {
@@ -1257,7 +1258,7 @@ private fun ChannelCards(channels: List<Channel>, match: Match) {
     options.forEach { o ->
         Card(Modifier.fillMaxWidth()) {
             Row(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(o.name, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                Text(Streaming.label(Channel(o.name, o.country)), style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
                 // Only apps installed on this phone get a button; the rest are listed for info.
                 if (o.launch != null) {
                     Spacer(Modifier.width(8.dp))

@@ -97,6 +97,7 @@ object Tracker {
         }
         findChannels(now)
         findBolivianChannels(now)
+        findNationalChannels(now)
         Store.state.value.matches.values.forEach { handleTransition(context, it) }
         scheduleNextWatch(context)
     }
@@ -220,6 +221,39 @@ object Tracker {
             s.copy(matches = s.matches.mapValues { (id, m) ->
                 found[id]?.let { m.copy(tv = m.tv + (Streaming.BOLIVIA to it)) } ?: m
             })
+        }
+    }
+
+    /**
+     * National-team games: the channels in each playing country that has a TV guide (see NationalTv),
+     * e.g. Peru vs Bolivia gets Bolivia's and Peru's, stored under each country's code. The followed
+     * team's page on each guide lists its games there; the game is the one on the same day in that
+     * country. Re-checked each refresh while upcoming; a failed read keeps what we had.
+     */
+    private fun findNationalChannels(now: Long) {
+        val s0 = Store.state.value
+        val found = mutableMapOf<String, Map<String, List<String>>>()   // match id -> country code -> channels
+        val pages = mutableMapOf<Pair<String, String>, List<BoliviaTv.Listing>>()  // (country, team page) -> games
+        for (m in s0.matches.values) {
+            if (m.state == "post" || m.dateMillis > now + 14 * 24 * HOUR) continue
+            val ours = s0.teams.filter { it.id in m.teamIds }.firstNotNullOfOrNull { NationalTv.country(it.name) } ?: continue
+            for (c in NationalTv.countriesIn(m, s0.teams)) {
+                val list = pages.getOrPut(c.code to ours.slug) {
+                    runCatching { BoliviaTv.listings(ours.slug, c.site) }.onFailure { Log.w(TAG, "${c.code} TV ${ours.slug}", it) }
+                        .getOrDefault(emptyList())
+                }
+                val date = Instant.ofEpochMilli(m.dateMillis).atZone(c.zone).toLocalDate()
+                val sameDay = list.filter { it.date == date }
+                // Names can be in Spanish ("España"), so the date settles it; names only pick between rows.
+                fun names(l: BoliviaTv.Listing, team: String) = l.teams.any { BoliviaTv.sameTeam(it, team) }
+                val listing = sameDay.firstOrNull { names(it, m.home) && names(it, m.away) } ?: sameDay.firstOrNull() ?: continue
+                found[m.id] = found[m.id].orEmpty() + (c.code to listing.channels)
+            }
+        }
+        Log.i(TAG, "National TV: ${found.size} games listed")
+        if (found.isEmpty()) return
+        Store.update { s ->
+            s.copy(matches = s.matches.mapValues { (id, m) -> found[id]?.let { m.copy(tv = m.tv + it) } ?: m })
         }
     }
 
