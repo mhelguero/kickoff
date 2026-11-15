@@ -68,23 +68,25 @@ object Streaming {
     const val BOLIVIA = "BO"
 
     /**
-     * FotMob's US channels and streaming services for a game, e.g. TUDN, ViX, Paramount+; for a
-     * national-team game, then each playing country's own channels (followed team's country first,
-     * see NationalTv). With none of those, the Bolivian channel if it's a Bolivian game that has one
-     * (e.g. Entel Gol).
+     * FotMob's US channels and streaming services for a game, e.g. TUDN, ViX, Paramount+; with none,
+     * the Bolivian channel if it's a Bolivian game that has one (e.g. Entel Gol).
      */
     fun channels(match: Match): List<Channel> {
-        fun list(country: String) = match.tv[country].orEmpty().map { shortName(it) }.distinct().map { Channel(it, country) }
-        val shown = list(COUNTRY) + NationalTv.countriesIn(match, Store.state.value.teams).flatMap { list(it.code) }
-        return shown.ifEmpty { list(BOLIVIA) }
+        val us = match.tv[COUNTRY].orEmpty()
+        val (names, country) = if (us.isNotEmpty()) us to COUNTRY else match.tv[BOLIVIA].orEmpty() to BOLIVIA
+        return names.map { shortName(it) }.distinct().map { Channel(it, country) }
     }
 
     /**
-     * A channel's name with its country's flag in front, unless it's a US channel: "🇧🇴 Unitel". A
+     * A channel's name with its country's flag in front, unless it's a US channel: "🇧🇴 Entel Gol". A
      * no-break space keeps the flag on the same line as the name when a card's list wraps.
      */
     fun label(channel: Channel): String =
-        if (channel.country == COUNTRY) channel.name else NationalTv.flag(channel.country) + "\u00A0" + channel.name
+        if (channel.country == COUNTRY) channel.name else flag(channel.country) + "\u00A0" + channel.name
+
+    /** "BO" -> 🇧🇴 (two regional indicator letters). */
+    private fun flag(code: String): String =
+        code.uppercase().map { String(Character.toChars(0x1F1E6 + (it - 'A'))) }.joinToString("")
 
     /**
      * Shorter, combined names: ESPN Select (formerly ESPN+) shows as "ESPN+"; ESPN Deportes,
@@ -102,7 +104,7 @@ object Streaming {
         }
     }
 
-    /** Short text for notifications and game cards, e.g. "TUDN, ViX, Paramount+, 🇧🇴 Unitel". */
+    /** Short text for notifications and game cards, e.g. "TUDN, ViX, Paramount+" or "🇧🇴 Entel Gol". */
     fun summary(match: Match, separator: String = ", "): String = channels(match).joinToString(separator) { label(it) }
 
     /** Slow (reads every installed app's name): call off the main thread. */

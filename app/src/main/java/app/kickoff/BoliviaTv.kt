@@ -7,10 +7,9 @@ import java.time.LocalDate
 
 /**
  * Bolivian channels for Bolivian league and cup games, from futbolenvivobolivia.com's team pages
- * (FotMob has no US channel for most of them). Its sister sites (futbolenvivoperu.com, ...) share the
- * layout, so [listings] reads any of them (see NationalTv). Unofficial: the page is read as HTML, so
- * any change to it just means no listing. A game is a table row: home and away teams, then its
- * channels; the date ("Domingo, 8/11/2026", in the site's country's time) heads its rows.
+ * (FotMob has no US channel for most of them). Unofficial: the page is read as HTML, so any change
+ * to it just means no listing. A game is a table row: home and away teams, then its
+ * channels; the date ("Domingo, 8/11/2026", in Bolivian time) heads its rows.
  */
 object BoliviaTv {
     data class Listing(val date: LocalDate, val teams: List<String>, val channels: List<String>)
@@ -18,12 +17,9 @@ object BoliviaTv {
     private const val BASE = "https://www.futbolenvivobolivia.com"
     private val DATE = Regex("""\b(\d{1,2})/(\d{1,2})/(\d{4})\b""")
 
-    /**
-     * The team's upcoming televised games in the site's country; empty if the site has no page for
-     * [team]. [site] is the site's address, e.g. "https://www.futbolenvivoperu.com".
-     */
-    fun listings(team: String, site: String = BASE): List<Listing> = parse(
-        Jsoup.connect("$site/equipo/${slug(team)}")
+    /** The team's upcoming televised games; empty if the site has no page for [team]. */
+    fun listings(team: String): List<Listing> = parse(
+        Jsoup.connect("$BASE/equipo/${slug(team)}")
             .userAgent("Mozilla/5.0 (Linux; Android) Kickoff/1.0")
             .timeout(15_000)
             .get()

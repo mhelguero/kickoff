@@ -869,8 +869,7 @@ private fun MatchScreen(m: Match, onBack: () -> Unit) {
                 HorizontalDivider()
                 if (channels.isEmpty()) Text("No US channel listed for this game yet.")
                 else {
-                    // Other countries' channels carry their flag; say so when there's no US one.
-                    if (channels.none { it.country == Streaming.COUNTRY }) Text("No US channel listed yet. Shown in other countries on:")
+                    if (channels.any { it.country == Streaming.BOLIVIA }) Text("No US channel listed. Shown in Bolivia on:")
                     ChannelCards(channels, m)
                 }
                 TextButton(onClick = { Streaming.openUrl(context, Streaming.findMoreUrl(m)) }) {
