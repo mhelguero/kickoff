@@ -58,6 +58,12 @@ object BoliviaTv {
         return raw.trim().replace(Regex("""\s*\([^)]*\)"""), "").trim().ifEmpty { null }
     }
 
+    /** Bolivia's national team ("Bolivia"), not a Bolivian club. */
+    fun isNationalTeam(name: String) = norm(name) == "bolivia"
+
+    /** A game of Bolivia's national team. */
+    fun isNationalGame(m: Match) = isNationalTeam(m.home) || isNationalTeam(m.away)
+
     /** Is this the same team? "Bolívar" and "Club Bolivar", "GV San José" and "Gualberto Villarroel San José"... */
     fun sameTeam(a: String, b: String): Boolean {
         val wa = words(a)

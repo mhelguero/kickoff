@@ -69,12 +69,13 @@ object Streaming {
 
     /**
      * FotMob's US channels and streaming services for a game, e.g. TUDN, ViX, Paramount+; with none,
-     * the Bolivian channel if it's a Bolivian game that has one (e.g. Entel Gol).
+     * the Bolivian channel if it's a Bolivian game that has one (e.g. Entel Gol). Bolivia's national
+     * team's games list the Bolivian channels after the US ones either way.
      */
     fun channels(match: Match): List<Channel> {
-        val us = match.tv[COUNTRY].orEmpty()
-        val (names, country) = if (us.isNotEmpty()) us to COUNTRY else match.tv[BOLIVIA].orEmpty() to BOLIVIA
-        return names.map { shortName(it) }.distinct().map { Channel(it, country) }
+        fun list(country: String) = match.tv[country].orEmpty().map { shortName(it) }.distinct().map { Channel(it, country) }
+        val us = list(COUNTRY)
+        return if (us.isEmpty() || BoliviaTv.isNationalGame(match)) us + list(BOLIVIA) else us
     }
 
     /**

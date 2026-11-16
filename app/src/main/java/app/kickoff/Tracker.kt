@@ -190,11 +190,14 @@ object Tracker {
      */
     private fun findBolivianChannels(now: Long) {
         val s0 = Store.state.value
-        // Bolivian competitions, or any game of a followed Bolivian team (its page lists cup games too).
-        val bolivianTeams = s0.teams.filter { "bolivia" in it.league.lowercase() }.map { it.id }.toSet()
+        // Bolivian competitions, or any game of a followed Bolivian team (its page lists cup games too),
+        // the national team included. The national team's are looked up even with a US channel: both show.
+        val bolivianTeams = s0.teams.filter { "bolivia" in it.league.lowercase() || BoliviaTv.isNationalTeam(it.name) }
+            .map { it.id }.toSet()
         val games = s0.matches.values.filter { m ->
             (m.leagueSlug.startsWith("bol.") || m.teamIds.any { it in bolivianTeams }) &&
-                m.state != "post" && m.dateMillis <= now + 14 * 24 * HOUR && m.tv[Streaming.COUNTRY].isNullOrEmpty()
+                m.state != "post" && m.dateMillis <= now + 14 * 24 * HOUR &&
+                (m.tv[Streaming.COUNTRY].isNullOrEmpty() || BoliviaTv.isNationalGame(m))
         }
         if (games.isEmpty()) return
         val pages = mutableMapOf<String, List<BoliviaTv.Listing>>()   // followed team id -> its listings
