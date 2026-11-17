@@ -31,6 +31,11 @@ const val WATCH_MAX_MS = 4 * HOUR
 private val ESPN_DAY_ZONE = ZoneId.of("America/New_York")
 private val BOLIVIA_ZONE = ZoneId.of("America/La_Paz")
 private const val PRE_GRACE_MS = 90 * MIN
+// Lineups come out about an hour before kickoff: look for them from a bit earlier, every few minutes.
+private const val LINEUP_LEAD_MS = 80 * MIN
+private const val LINEUP_STEP_MS = 5 * MIN
+// ... and stop looking shortly after kickoff (the kickoff alert follows anyway).
+private const val LINEUP_LATE_MS = 15 * MIN
 /** Played games are kept this long: enough for the whole of last week (Sunday to Saturday). */
 private const val KEEP_MS = 15 * 24 * HOUR
 
@@ -317,6 +322,38 @@ object Tracker {
         if (justEnded) scheduleFeedLoad(context, match.id, 30 * MIN)
     }
 
+    /**
+     * Upcoming games whose lineups may come out soon and haven't been announced to the user: their
+     * FotMob id is known, alerts are on, and kickoff is within [LINEUP_LEAD_MS] (or just passed).
+     * With [now] null, any such game still to come (for scheduling).
+     */
+    private fun awaitingLineups(s: AppState, now: Long?): List<Match> {
+        val t = now ?: System.currentTimeMillis()
+        return s.matches.values.filter { m ->
+            val alert = s.alerts[m.id]
+            m.state == "pre" && m.timeValid && m.fotmobId.isNotBlank() && alert?.lineups != true && alert?.muted != true &&
+                t <= m.dateMillis + LINEUP_LATE_MS && (now == null || now >= m.dateMillis - LINEUP_LEAD_MS)
+        }
+    }
+
+    /** Checks FotMob for the lineups of games about to start; alerts once per game when they're out. */
+    private fun checkLineups(context: Context, now: Long) {
+        for (m in awaitingLineups(Store.state.value, now)) {
+            val lineups = runCatching { FotMob.lineups(m.fotmobId) }
+                .onFailure { Log.w(TAG, "lineups ${m.id} failed", it) }
+                .getOrNull()?.takeIf { it.announced } ?: continue
+            // Decided inside the store lock, so two checks running at once alert only once.
+            var shouldNotify = false
+            Store.update { st ->
+                val alert = st.alerts[m.id] ?: AlertState()
+                if (alert.lineups) return@update st
+                shouldNotify = !alert.muted
+                st.copy(alerts = st.alerts + (m.id to alert.copy(lineups = true, notified = alert.notified || shouldNotify)))
+            }
+            if (shouldNotify) Notifier.lineupsAlert(context, m, lineups)
+        }
+    }
+
     /** Load the Feed (news, highlights, YouTube searches) in the background after [delayMs]. */
     fun scheduleFeedLoad(context: Context, tag: String, delayMs: Long) {
         val req = OneTimeWorkRequestBuilder<FeedWorker>()
@@ -336,27 +373,39 @@ object Tracker {
             .enqueueUniquePeriodicWork("refresh", ExistingPeriodicWorkPolicy.KEEP, req)
     }
 
-    /** Set an alarm for the next kickoff (or now, if a game is already in its window). */
+    /**
+     * Set an alarm for the next kickoff or the next game's lineup check (or now, if a game is
+     * already in its window).
+     */
     fun scheduleNextWatch(context: Context) {
         val now = System.currentTimeMillis()
         val s = Store.state.value
-        // Same rule as gamesToWatch, so an alarm never fires for a game it then won't watch.
-        val next = s.matches.values
-            .filter { stillOpen(it, s, now) }
-            .minOfOrNull { it.dateMillis - WATCH_LEAD_MS } ?: return
+        // Same rules as gamesToWatch and awaitingLineups, so an alarm never fires for nothing to do.
+        val kickoff = s.matches.values.filter { stillOpen(it, s, now) }.minOfOrNull { it.dateMillis - WATCH_LEAD_MS }
+        val lineups = awaitingLineups(s, null).minOfOrNull { it.dateMillis - LINEUP_LEAD_MS }
+        val next = listOfNotNull(kickoff, lineups).minOrNull() ?: return
         setWatchAlarm(context, maxOf(next, now + 1000))
     }
 
     /**
-     * One watch step, run from the alarm: polls live games and, while any still needs watching,
-     * sets the next alarm a minute out. Exact alarms keep firing while the phone sleeps, so no
+     * One watch step, run from the alarm: checks for lineups of games about to start and polls live
+     * games; while there's still something to do, sets the next alarm a minute out (live games) or a
+     * few minutes out (lineups only). Exact alarms keep firing while the phone sleeps, so no
      * foreground service (and no permanent notification) is needed.
      */
     fun watchTick(context: Context) {
-        if (gamesToWatch().isEmpty()) return scheduleNextWatch(context)
-        // Set first: if this poll is cut short, the next minute's alarm still comes.
-        setWatchAlarm(context, System.currentTimeMillis() + MIN)
-        if (!pollOnce(context)) scheduleNextWatch(context)
+        val now = System.currentTimeMillis()
+        val live = gamesToWatch(now).isNotEmpty()
+        if (!live && awaitingLineups(Store.state.value, now).isEmpty()) return scheduleNextWatch(context)
+        // Set first: if this pass is cut short, the next alarm still comes.
+        setWatchAlarm(context, now + if (live) MIN else LINEUP_STEP_MS)
+        checkLineups(context, now)
+        val stillLive = live && pollOnce(context)
+        if (!stillLive) {
+            val later = System.currentTimeMillis()
+            if (awaitingLineups(Store.state.value, later).isEmpty()) scheduleNextWatch(context)
+            else if (live) setWatchAlarm(context, later + LINEUP_STEP_MS)
+        }
     }
 
     // One alarm slot: the next-kickoff alarm and the per-minute watch alarm replace each other.

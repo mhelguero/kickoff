@@ -19,7 +19,7 @@ object Notifier {
         val nm = context.getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(
             NotificationChannel(CH_GAMES, "Game alerts", NotificationManager.IMPORTANCE_HIGH)
-                .apply { description = "Kickoff, second half and full time" }
+                .apply { description = "Lineups, kickoff, second half and full time" }
         )
         // Older versions showed a permanent "Tracking live" notification on this channel.
         nm.deleteNotificationChannel("watching")
@@ -38,6 +38,14 @@ object Notifier {
         else Streaming.summary(match, Streaming.DOT).ifEmpty { "Tap to see where to watch" }
         val text = listOf(watch, match.league).filter { it.isNotBlank() }.joinToString("\n")
         post(context, match.id.hashCode(), title, text, openMatchIntent(context, match.id))
+    }
+
+    /** The starting lineups are out, e.g. "Real Madrid 4-3-3 • Celta Vigo 3-5-2". */
+    fun lineupsAlert(context: Context, match: Match, lineups: FotMob.Lineups) {
+        val sides = listOf(lineups.home, lineups.away)
+            .joinToString(Streaming.DOT) { s -> listOf(s.name, s.formation).filter { it.isNotBlank() }.joinToString(" ") }
+        val text = listOf(sides, "Tap to see them", match.league).filter { it.isNotBlank() }.joinToString("\n")
+        post(context, match.id.hashCode(), "Lineups are out: ${match.title}", text, openMatchIntent(context, match.id))
     }
 
     private fun post(context: Context, id: Int, title: String, text: String, intent: PendingIntent) {

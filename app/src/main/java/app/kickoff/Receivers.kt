@@ -9,7 +9,10 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
-/** Fires at kickoff and then every minute while a followed team is playing (see Tracker.watchTick). */
+/**
+ * Fires for lineup checks (every few minutes from about an hour before kickoff), at kickoff, and then
+ * every minute while a followed team is playing (see Tracker.watchTick).
+ */
 class AlarmReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val app = context.applicationContext
