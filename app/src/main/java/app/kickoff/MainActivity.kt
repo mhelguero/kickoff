@@ -104,6 +104,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
@@ -890,6 +891,8 @@ private fun MatchScreen(m: Match, onBack: () -> Unit) {
  */
 @Composable
 private fun LineupSection(m: Match) {
+    // The game as it is now (live polling updates it), for the refresh loop below.
+    val current by rememberUpdatedState(m)
     val details by produceState<FotMob.Details?>(null, m.id, m.fotmobId) {
         // Games found only through ESPN's results (e.g. last week's) don't know their FotMob id yet:
         // it's the game of a followed team's FotMob fixtures that kicks off within 3 hours.
@@ -902,11 +905,18 @@ private fun LineupSection(m: Match) {
             }.orEmpty()
         }
         if (fid.isBlank()) return@produceState
+        // Live: every minute, for new goals, subs and ratings. Close to kickoff: every 2 minutes
+        // until the lineups are in, then every 5 until it starts. Once it has ended, one last read.
         while (true) {
             withContext(Dispatchers.IO) { runCatching { FotMob.details(fid) }.getOrNull() }?.let { value = it }
-            val soon = m.state != "post" && System.currentTimeMillis() > m.dateMillis - 3 * 60 * 60 * 1000L
-            if (value?.lineups?.announced == true || !soon) break
-            delay(2 * 60 * 1000L)
+            val g = current
+            val soon = g.state == "pre" && System.currentTimeMillis() > g.dateMillis - 3 * 60 * 60 * 1000L
+            delay(when {
+                g.state == "in" -> 60 * 1000L
+                soon && value?.lineups?.announced != true -> 2 * 60 * 1000L
+                soon -> 5 * 60 * 1000L
+                else -> break
+            })
         }
     }
     // The league table (finished games only), loaded after the rest.
@@ -928,9 +938,8 @@ private fun LineupSection(m: Match) {
         teams.firstOrNull { it.fotmobId == fid }?.let { colorOf(it) }
             ?: runCatching { Color(android.graphics.Color.parseColor(hex)) }.getOrNull()
     }.filterValues { it != null }.mapValues { it.value!! }
-    if (m.state == "post") {
-        if (d.goals.isNotEmpty()) GoalsCard(d.goals)
-    }
+    // Live and finished games: the goals so far.
+    if (m.state != "pre" && d.goals.isNotEmpty()) GoalsCard(d.goals)
     val l = d.lineups
     if (l == null) {
         if (table.isNotEmpty()) TableCard(table, rowColors)
@@ -1214,7 +1223,7 @@ private fun LineupCard(side: FotMob.Side, best: Double?, tally: Tally) {
                         Spacer(Modifier.width(4.dp))
                         GoalIcons(p, tally, LocalContentColor.current)
                     }
-                    // Finished games: each player's FotMob rating.
+                    // Live and finished games: each player's FotMob rating.
                     p.rating?.let { RatingBadge(it, best) }
                 }
             }
