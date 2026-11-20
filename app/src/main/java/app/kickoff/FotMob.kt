@@ -269,9 +269,11 @@ object FotMob {
             val perf = p.obj["performance"].obj
             val rating = perf.str("rating")?.toDoubleOrNull()
             val cameOn = perf["substitutionEvents"].arr.map { it.obj }.firstOrNull { it.str("type") == "subIn" }?.str("time")?.toIntOrNull()
+            // FotMob's vertical layout is mirrored for a pitch with the goalkeeper at the bottom (its
+            // right backs are near x = 0), so x is flipped: left-sided players end up on the left.
             val at = p.obj["verticalLayout"].obj
             p.obj.str("name")?.let {
-                Player(it, p.obj.str("shirtNumber").orEmpty(), rating, at.str("x")?.toFloatOrNull(), at.str("y")?.toFloatOrNull(),
+                Player(it, p.obj.str("shirtNumber").orEmpty(), rating, at.str("x")?.toFloatOrNull()?.let { 1f - it }, at.str("y")?.toFloatOrNull(),
                     p.obj.str("id").orEmpty(), p.obj.str("lastName").orEmpty(), cameOn,
                     p.obj.str("age").orEmpty(), p.obj.str("countryName").orEmpty())
             }
