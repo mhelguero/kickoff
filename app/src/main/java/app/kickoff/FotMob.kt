@@ -86,6 +86,8 @@ object FotMob {
         val id: String = "",
         val lastName: String = "",
         val cameOn: Int? = null,  // for subs: the minute they came on, if they did
+        val age: String = "",
+        val country: String = "",
     ) {
         /** FotMob's photo of the player. */
         val photo get() = "https://images.fotmob.com/image_resources/playerimages/$id.png"
@@ -134,7 +136,15 @@ object FotMob {
         val teamIds: List<String>,
         val leagueId: String?,                 // the competition (its parent for e.g. a group stage)
         val colors: Map<String, String>,       // FotMob team id -> team color ("#085098")
+        val playerStats: Map<String, PlayerStats> = emptyMap(),  // FotMob player id -> this game's stats
     )
+
+    /** One stat, ready to show: "Accurate passes", "16/17 (94%)". */
+    data class Stat(val label: String, val value: String)
+    data class StatGroup(val title: String, val stats: List<Stat>)
+
+    /** A player's stats in one game, in FotMob's groups (Top stats, Attack, Defense, ...). */
+    data class PlayerStats(val position: String, val groups: List<StatGroup>)
 
     /** One knockout tie: the teams, the aggregate score once started, and the winner once decided. */
     data class Tie(
@@ -175,7 +185,44 @@ object FotMob {
         val awayId = general["awayTeam"].obj.str("id").orEmpty()
         return Details(lineups(content["lineup"] as? JsonObject), goals, star, tableLeague, teamIds.ifEmpty { listOf(homeId, awayId) },
             general.str("parentLeagueId") ?: general.str("leagueId"),
-            mapOf(homeId to colors.str("home").orEmpty(), awayId to colors.str("away").orEmpty()).filterValues { it.isNotBlank() })
+            mapOf(homeId to colors.str("home").orEmpty(), awayId to colors.str("away").orEmpty()).filterValues { it.isNotBlank() },
+            playerStats(content["playerStats"] as? JsonObject))
+    }
+
+    /**
+     * Each player's stats in the game, by FotMob player id. Values are formatted the way FotMob shows
+     * them: "16/17 (94%)", "0.29", "11.67 km", "30 km/h". The rating (shown as a badge) and the
+     * shot map flag are left out.
+     */
+    private fun playerStats(all: JsonObject?): Map<String, PlayerStats> {
+        if (all == null) return emptyMap()
+        fun num(d: Double) = if (d == Math.floor(d) && Math.abs(d) < 1e9) d.toLong().toString()
+            else "%.2f".format(java.util.Locale.US, d).trimEnd('0').trimEnd('.')
+        fun km(m: Double) = "%.2f km".format(java.util.Locale.US, m / 1000)
+        fun pct(v: Double, t: Double) = if (t > 0) " (${Math.round(100 * v / t)}%)" else ""
+        val positions = mapOf("0" to "Goalkeeper", "1" to "Defender", "2" to "Midfielder", "3" to "Forward")
+        return all.mapNotNull { (id, e) ->
+            val p = e as? JsonObject ?: return@mapNotNull null
+            val groups = p["stats"].arr.mapNotNull { g ->
+                val stats = (g.obj["stats"] as? JsonObject).orEmpty().mapNotNull { (label, v) ->
+                    if (v.obj.str("key") == "rating_title") return@mapNotNull null
+                    val st = v.obj["stat"].obj
+                    val value = st.str("value")?.toDoubleOrNull() ?: return@mapNotNull null
+                    val total = st.str("total")?.toDoubleOrNull()
+                    val shown = when (st.str("type")) {
+                        "boolean" -> return@mapNotNull null
+                        "speed" -> "${num(value)} km/h"
+                        "distance" -> km(value)
+                        "distanceWithPercentage" -> km(value) + (total?.let { pct(value, it) }.orEmpty())
+                        "fractionWithPercentage" -> "${num(value)}/${num(total ?: 0.0)}" + (total?.let { pct(value, it) }.orEmpty())
+                        else -> num(value)
+                    }
+                    Stat(label, shown)
+                }
+                stats.takeIf { it.isNotEmpty() }?.let { StatGroup(g.obj.str("title").orEmpty(), it) }
+            }
+            id to PlayerStats(positions[p.str("usualPosition")].orEmpty(), groups)
+        }.toMap()
     }
 
     /**
@@ -225,7 +272,8 @@ object FotMob {
             val at = p.obj["verticalLayout"].obj
             p.obj.str("name")?.let {
                 Player(it, p.obj.str("shirtNumber").orEmpty(), rating, at.str("x")?.toFloatOrNull(), at.str("y")?.toFloatOrNull(),
-                    p.obj.str("id").orEmpty(), p.obj.str("lastName").orEmpty(), cameOn)
+                    p.obj.str("id").orEmpty(), p.obj.str("lastName").orEmpty(), cameOn,
+                    p.obj.str("age").orEmpty(), p.obj.str("countryName").orEmpty())
             }
         }
         fun side(key: String): Side {

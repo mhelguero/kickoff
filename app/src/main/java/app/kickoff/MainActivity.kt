@@ -73,6 +73,8 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -956,7 +958,14 @@ private fun LineupSection(m: Match) {
             d.goals.filter { it.note != "OG" && it.scorerId.isNotBlank() }.groupingBy { it.scorerId }.eachCount(),
             d.goals.filter { it.assistId.isNotBlank() }.groupingBy { it.assistId }.eachCount(),
         )
-        listOf(l.home, l.away).forEach { side -> LineupCard(side, best, tally) }
+        // Tapping a player opens their details and this game's stats.
+        var picked by remember(m.id) { mutableStateOf<Pair<String, String>?>(null) }  // player id, team name
+        listOf(l.home, l.away).forEach { side -> LineupCard(side, best, tally) { p -> picked = p.id to side.name } }
+        picked?.let { (id, team) ->
+            // The latest version of the player (live games keep updating).
+            listOf(l.home, l.away).flatMap { it.starters + it.bench }.firstOrNull { it.id == id }
+                ?.let { p -> PlayerSheet(p, team, d.playerStats[id], best, tally, m.state) { picked = null } }
+        }
     } else if (m.state == "pre") {
         Text("Lineups are announced about an hour before kickoff.", color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
@@ -1017,7 +1026,7 @@ private fun GoalsCard(goals: List<FotMob.Goal>) {
  */
 @Composable
 @OptIn(ExperimentalLayoutApi::class)
-private fun Pitch(starters: List<FotMob.Player>, best: Double?, tally: Tally) {
+private fun Pitch(starters: List<FotMob.Player>, best: Double?, tally: Tally, onPlayer: (FotMob.Player) -> Unit) {
     val lines = Color.White.copy(alpha = 0.35f)
     // A player with two or more goals and assists may need a second row of icons under the rating
     // (icons stay full size and wrap rather than shrink), so the pitch makes room for it.
@@ -1056,7 +1065,8 @@ private fun Pitch(starters: List<FotMob.Player>, best: Double?, tally: Tally) {
             val centerX = (maxWidth * p.x!!).coerceIn(markerWidth / 2, maxWidth - markerWidth / 2)
             val centerY = maxHeight - bottom - (maxHeight - top - bottom) * depth
             Column(
-                Modifier.width(markerWidth).offset(x = centerX - markerWidth / 2, y = centerY - 18.dp),
+                Modifier.width(markerWidth).offset(x = centerX - markerWidth / 2, y = centerY - 18.dp)
+                    .clickable(enabled = p.id.isNotBlank()) { onPlayer(p) },
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 PlayerPhoto(p)
@@ -1069,6 +1079,66 @@ private fun Pitch(starters: List<FotMob.Player>, best: Double?, tally: Tally) {
                 ) {
                     p.rating?.let { RatingBadge(it, best, Modifier.align(Alignment.CenterVertically)) }
                     GoalIcons(p, tally, Color.White, Modifier.align(Alignment.CenterVertically))
+                }
+            }
+        }
+    }
+}
+
+/**
+ * A player's details (photo, number, team, position, age, country) and this game's stats in FotMob's
+ * groups (Top stats, Attack, Defense, Duels, Physical metrics; saves and the like for goalkeepers).
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PlayerSheet(
+    p: FotMob.Player, team: String, stats: FotMob.PlayerStats?, best: Double?, tally: Tally, state: String,
+    onDismiss: () -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+        Column(
+            Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                PlayerPhoto(p)
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(p.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    val dim = MaterialTheme.colorScheme.onSurfaceVariant
+                    listOf(p.number.takeIf { it.isNotBlank() }?.let { "#$it" }, team, stats?.position)
+                        .filter { !it.isNullOrBlank() }.joinToString(Streaming.DOT).takeIf { it.isNotEmpty() }
+                        ?.let { Text(it, color = dim) }
+                    listOf(p.age.takeIf { it.isNotBlank() }?.let { "Age $it" }, p.country)
+                        .filter { !it.isNullOrBlank() }.joinToString(Streaming.DOT).takeIf { it.isNotEmpty() }
+                        ?.let { Text(it, color = dim) }
+                }
+                p.rating?.let { RatingBadge(it, best, big = true) }
+            }
+            val goals = tally.goals[p.id] ?: 0
+            val assists = tally.assists[p.id] ?: 0
+            if (goals + assists > 0 || p.cameOn != null) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                    GoalIcons(p, tally, LocalContentColor.current)
+                    p.cameOn?.let {
+                        if (goals + assists > 0) Spacer(Modifier.width(8.dp))
+                        Text("Came on $it'", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+            val groups = stats?.groups.orEmpty()
+            if (groups.isEmpty()) {
+                Text(if (state == "pre") "Stats appear once the game starts." else "No stats for this player in this game.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            groups.forEach { g ->
+                HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                Text(g.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                g.stats.forEach { st ->
+                    Row {
+                        Text(st.label, modifier = Modifier.weight(1f))
+                        Text(st.value, fontWeight = FontWeight.Bold)
+                    }
                 }
             }
         }
@@ -1205,7 +1275,7 @@ private fun KnockoutCard(rounds: List<FotMob.Round>, colors: Map<String, Color>)
 
 /** One team's starting XI with shirt numbers, then its coach and bench. */
 @Composable
-private fun LineupCard(side: FotMob.Side, best: Double?, tally: Tally) {
+private fun LineupCard(side: FotMob.Side, best: Double?, tally: Tally, onPlayer: (FotMob.Player) -> Unit) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1213,9 +1283,9 @@ private fun LineupCard(side: FotMob.Side, best: Double?, tally: Tally) {
                 if (side.formation.isNotBlank()) Text(side.formation, fontWeight = FontWeight.Bold)
             }
             // On a pitch in their formation when FotMob places them, else as a list.
-            if (side.starters.all { it.x != null && it.y != null }) Pitch(side.starters, best, tally)
+            if (side.starters.all { it.x != null && it.y != null }) Pitch(side.starters, best, tally, onPlayer)
             else side.starters.forEach { p ->
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.clickable(enabled = p.id.isNotBlank()) { onPlayer(p) }, verticalAlignment = Alignment.CenterVertically) {
                     Text(p.number, modifier = Modifier.width(32.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
                     // The name wraps before the icons shrink.
                     Row(Modifier.weight(1f).padding(end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -1235,7 +1305,7 @@ private fun LineupCard(side: FotMob.Side, best: Double?, tally: Tally) {
             // rest of the bench.
             val cameOn = side.bench.filter { it.cameOn != null || it.rating != null }.sortedBy { it.cameOn ?: Int.MAX_VALUE }
             cameOn.forEach { p ->
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.clickable(enabled = p.id.isNotBlank()) { onPlayer(p) }, verticalAlignment = Alignment.CenterVertically) {
                     Text(p.number, modifier = Modifier.width(32.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Row(Modifier.weight(1f).padding(end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text("${p.name} (sub${p.cameOn?.let { " $it'" }.orEmpty()})", color = MaterialTheme.colorScheme.onSurfaceVariant,
