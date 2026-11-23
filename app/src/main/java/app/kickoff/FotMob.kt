@@ -151,6 +151,13 @@ object FotMob {
     data class Tie(
         val home: String, val away: String, val homeId: String, val awayId: String,
         val homeScore: Int?, val awayScore: Int?, val winnerId: String?, val bestOf: Int, val firstGameMillis: Long?,
+        val games: List<TieGame> = emptyList(),
+    )
+
+    /** One game of a knockout tie (a leg, or a game of a best-of series): FotMob's id, teams, score, time. */
+    data class TieGame(
+        val id: String, val home: String, val away: String, val homeScore: String?, val awayScore: String?,
+        val startMillis: Long, val started: Boolean, val finished: Boolean,
     )
     data class Round(val name: String, val ties: List<Tie>)
 
@@ -248,9 +255,18 @@ object FotMob {
                     val games = t["matches"].arr.map { it.obj }
                     val started = games.any { it["status"].obj.str("started") == "true" }
                     val first = games.mapNotNull { g -> g["status"].obj.str("utcTime")?.let { runCatching { OffsetDateTime.parse(it).toInstant().toEpochMilli() }.getOrNull() } }.minOrNull()
+                    val legs = games.mapNotNull { g ->
+                        val st = g["status"].obj
+                        val time = st.str("utcTime")?.let { runCatching { OffsetDateTime.parse(it).toInstant().toEpochMilli() }.getOrNull() }
+                            ?: return@mapNotNull null
+                        val begun = st.str("started") == "true"
+                        TieGame((g.str("matchId") ?: return@mapNotNull null), g["home"].obj.str("name").orEmpty(), g["away"].obj.str("name").orEmpty(),
+                            if (begun) g["home"].obj.str("score") else null, if (begun) g["away"].obj.str("score") else null,
+                            time, begun, st.str("finished") == "true")
+                    }.sortedBy { it.startMillis }
                     Tie(t.str("homeTeam")!!, t.str("awayTeam")!!, t.str("homeTeamId").orEmpty(), t.str("awayTeamId").orEmpty(),
                         if (started) agg.str("homeScore")?.toIntOrNull() else null, if (started) agg.str("awayScore")?.toIntOrNull() else null,
-                        t.str("aggregatedWinner") ?: t.str("winner"), t.str("bestOf")?.toIntOrNull()?.coerceAtLeast(1) ?: 1, first)
+                        t.str("aggregatedWinner") ?: t.str("winner"), t.str("bestOf")?.toIntOrNull()?.coerceAtLeast(1) ?: 1, first, legs)
                 }
             if (ties.isEmpty()) null else Round(roundName(r.str("stage").orEmpty()), ties)
         }

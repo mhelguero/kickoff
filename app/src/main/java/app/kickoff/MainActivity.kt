@@ -20,6 +20,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.app.NotificationManagerCompat
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Box
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.runtime.CompositionLocalProvider
@@ -286,11 +287,31 @@ private fun Root(openMatch: String?, onOpenMatch: (String?) -> Unit, needsSetup:
     // A followed league's own page (its name tapped on a league card), its code; a game opened from
     // it comes back to it.
     var openLeague by rememberSaveable { mutableStateOf<String?>(null) }
-    val match = openMatch?.let { state.matches[it] }
+    // Game pages opened from a game page (a knockout game): Back goes back through them.
+    var history by rememberSaveable { mutableStateOf(listOf<String>()) }
+    LaunchedEffect(openMatch) { if (openMatch == null) history = emptyList() }
+    // Knockout games the app doesn't track (no followed team or league), opened from a bracket.
+    val extra = remember { mutableStateMapOf<String, Match>() }
+    fun openGame(g: Match) {
+        // The app's own copy when it tracks the game (channels, live score), else FotMob's.
+        val id = state.matches.values.firstOrNull { it.fotmobId == g.fotmobId }?.id ?: g.id.also { extra[it] = g }
+        if (id == openMatch) return
+        openMatch?.let { history = history + it }
+        onOpenMatch(id)
+    }
+    fun back() {
+        val previous = history.lastOrNull()
+        history = history.dropLast(1)
+        onOpenMatch(previous)
+    }
+    val match = openMatch?.let { state.matches[it] ?: extra[it] }
     val league = openLeague?.let { slug -> state.leagues.firstOrNull { it.slug == slug } }
     if (match != null) {
-        BackHandler { onOpenMatch(null) }
-        MatchScreen(match, onBack = { onOpenMatch(null) })
+        BackHandler { back() }
+        // Each game page keeps its own tab and scroll position, for coming back to it.
+        saved.SaveableStateProvider("match-${match.id}") {
+            MatchScreen(match, onBack = { back() }, onOpenGame = { openGame(it) })
+        }
     } else if (league != null) {
         BackHandler { openLeague = null }
         saved.SaveableStateProvider("league-${league.slug}") {
@@ -695,7 +716,7 @@ private fun LeagueScreen(league: League, state: AppState, onBack: () -> Unit, on
         ) {
             if (live.isNotEmpty()) {
                 item(key = "live-header") { SectionHeader("Live") }
-                items(live, key = { "live-${it.id}" }) { m -> GameCard(m, state.teams, muted(m)) { onOpenMatch(m.id) } }
+                items(live, key = { "live-${it.id}" }) { m -> GameCard(m, state.teams, muted(m), crests = true) { onOpenMatch(m.id) } }
             }
             if (ended.isNotEmpty()) {
                 item(key = "ended-header") {
@@ -711,14 +732,14 @@ private fun LeagueScreen(league: League, state: AppState, onBack: () -> Unit, on
                 }
                 if (endedOpen) ended.groupBy { it.zoned().toLocalDate() }.forEach { (day, dayGames) ->
                     item(key = "ended-day-$day") { DayDivider(dividerFmt.format(day)) }
-                    items(dayGames, key = { "ended-${it.id}" }) { m -> GameCard(m, state.teams) { onOpenMatch(m.id) } }
+                    items(dayGames, key = { "ended-${it.id}" }) { m -> GameCard(m, state.teams, crests = true) { onOpenMatch(m.id) } }
                 }
             }
             item(key = "upcoming-header") { Column { SectionHeader("Upcoming"); SectionLine() } }
             if (upcoming.isEmpty()) item { Hint("No games in the next two weeks.") }
             upcoming.groupBy { it.zoned().toLocalDate() }.forEach { (day, dayGames) ->
                 item(key = "day-$day") { DayDivider(dividerFmt.format(day)) }
-                items(dayGames, key = { "up-${it.id}" }) { m -> GameCard(m, state.teams, muted(m)) { onOpenMatch(m.id) } }
+                items(dayGames, key = { "up-${it.id}" }) { m -> GameCard(m, state.teams, muted(m), crests = true) { onOpenMatch(m.id) } }
             }
         }
     }
@@ -811,7 +832,7 @@ private fun LeagueGamesCard(
 }
 
 @Composable
-private fun GameCard(m: Match, teams: List<Team>, muted: Boolean? = null, onClick: () -> Unit) = DefaultFontSize {
+private fun GameCard(m: Match, teams: List<Team>, muted: Boolean? = null, crests: Boolean = false, onClick: () -> Unit) = DefaultFontSize {
     val live = m.state == "in"
     val background = teamColor(m, teams)
     val content = contentOn(background)
@@ -850,7 +871,7 @@ private fun GameCard(m: Match, teams: List<Team>, muted: Boolean? = null, onClic
                 }
             }
             Spacer(Modifier.height(4.dp))
-            TeamsLine(m)
+            TeamsLine(m, crests)
             // Where to watch only matters before and during the game.
             if (m.state != "post") {
                 Spacer(Modifier.height(4.dp))
@@ -1010,13 +1031,13 @@ private fun TeamCrest(teamId: String, background: Color?, size: Dp = 48.dp, gap:
 
 /** A team's crest at name size, in a fixed space (so names line up while crests load, or if one is missing). */
 @Composable
-private fun SmallCrest(teamId: String, modifier: Modifier = Modifier) {
+private fun SmallCrest(teamId: String, modifier: Modifier = Modifier, size: Dp = 18.dp) {
     val context = LocalContext.current
     val url = "https://a.espncdn.com/i/teamlogos/soccer/500/$teamId.png"
     val crest by produceState<ImageBitmap?>(null, url) {
         if (teamId.isNotBlank()) value = withContext(Dispatchers.IO) { Logos.load(context, url) }
     }
-    Box(modifier.size(18.dp)) {
+    Box(modifier.size(size)) {
         crest?.let { Image(it, contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize()) }
     }
 }
@@ -1042,14 +1063,17 @@ private fun teamColor(m: Match, teams: List<Team>): Color? = colorOf(teams.first
  * team on the right, each name wrapping on its own side.
  */
 @Composable
-private fun TeamsLine(m: Match) {
+private fun TeamsLine(m: Match, crests: Boolean = false) {
     val style = MaterialTheme.typography.titleLarge
     val middle = if (m.state != "pre" && m.homeScore != null) "${m.homeScore} – ${m.awayScore}" else "vs"
     Row(verticalAlignment = Alignment.CenterVertically) {
+        // On a league's page, each team's crest beside its name.
+        if (crests) SmallCrest(m.homeId, Modifier.padding(end = 8.dp), size = 28.dp)
         TeamName(m.home, style, TextAlign.Start, Modifier.weight(1f))
         Text(middle, style = style, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center,
             modifier = Modifier.padding(horizontal = 10.dp).widthIn(min = 56.dp))
         TeamName(m.away, style, TextAlign.End, Modifier.weight(1f))
+        if (crests) SmallCrest(m.awayId, Modifier.padding(start = 8.dp), size = 28.dp)
     }
 }
 
@@ -1082,7 +1106,7 @@ private fun scoreLine(m: Match) =
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun MatchScreen(m: Match, onBack: () -> Unit) {
+private fun MatchScreen(m: Match, onBack: () -> Unit, onOpenGame: (Match) -> Unit) {
     val context = LocalContext.current
     // ESPN and ESPN+ are one app, so one row here (cards still list both).
     val channels = Streaming.channels(m).map { if (it.name == "ESPN+") it.copy(name = "ESPN") else it }.distinct()
@@ -1103,8 +1127,14 @@ private fun MatchScreen(m: Match, onBack: () -> Unit) {
             Text(scoreLine(m), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
             Text(listOf(m.statusLabel, m.localTime()).filter { it.isNotBlank() }.joinToString(Streaming.DOT),
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
+            // The game itself, or the competition's standings (table and knockout bracket).
+            var tab by rememberSaveable { mutableIntStateOf(0) }
+            TabRow(selectedTabIndex = tab) {
+                Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("Game", fontWeight = FontWeight.Bold) })
+                Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("Standings", fontWeight = FontWeight.Bold) })
+            }
             // Finished games: no channels, just the lineups (and who was out).
-            if (m.state != "post") {
+            if (tab == 0 && m.state != "post") {
                 HorizontalDivider()
                 if (channels.isEmpty()) Text("No US channel listed for this game yet.")
                 else {
@@ -1117,7 +1147,7 @@ private fun MatchScreen(m: Match, onBack: () -> Unit) {
                     Text("Search for other ways to watch")
                 }
             }
-            LineupSection(m)
+            LineupSection(m, standings = tab == 1, onOpenGame = onOpenGame)
         }
     }
 }
@@ -1128,7 +1158,7 @@ private fun MatchScreen(m: Match, onBack: () -> Unit) {
  * Close to kickoff, checked again every 2 minutes until the lineups are in.
  */
 @Composable
-private fun LineupSection(m: Match) {
+private fun LineupSection(m: Match, standings: Boolean, onOpenGame: (Match) -> Unit) {
     // The game as it is now (live polling updates it), for the refresh loop below.
     val current by rememberUpdatedState(m)
     val details by produceState<FotMob.Details?>(null, m.id, m.fotmobId) {
@@ -1172,7 +1202,11 @@ private fun LineupSection(m: Match) {
         val league = details?.leagueId ?: return@produceState
         value = withContext(Dispatchers.IO) { runCatching { FotMob.knockout(league) }.getOrDefault(emptyList()) }
     }
-    val d = details ?: return
+    val d = details
+    if (d == null) {
+        if (standings) Hint("No standings for this game.")
+        return
+    }
     // The two teams' colors, for their rows in the table and bracket: a followed team's own card
     // color, else FotMob's color for the team.
     val teams = Store.state.value.teams
@@ -1180,14 +1214,16 @@ private fun LineupSection(m: Match) {
         teams.firstOrNull { it.fotmobId == fid }?.let { colorOf(it) }
             ?: runCatching { Color(android.graphics.Color.parseColor(hex)) }.getOrNull()
     }.filterValues { it != null }.mapValues { it.value!! }
-    // Live and finished games: the goals so far.
-    if (m.state != "pre" && d.goals.isNotEmpty()) GoalsCard(d.goals)
-    val l = d.lineups
-    if (l == null) {
+    // The Standings tab: the table, then the knockout bracket (its games open their pages).
+    if (standings) {
         if (table.isNotEmpty()) TableCard(table, rowColors)
-        if (knockout.isNotEmpty()) KnockoutCard(knockout, rowColors)
+        if (knockout.isNotEmpty()) KnockoutCard(knockout, rowColors) { g -> onOpenGame(g.asMatch(m.league)) }
+        if (table.isEmpty() && knockout.isEmpty()) Hint(if (d.tableLeague == null && d.leagueId == null) "No standings for this competition." else "Loading standings…")
         return
     }
+    // Live and finished games: the goals so far.
+    if (m.state != "pre" && d.goals.isNotEmpty()) GoalsCard(d.goals)
+    val l = d.lineups ?: return
     HorizontalDivider()
     if (l.announced) {
         Text("Lineups", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
@@ -1227,9 +1263,17 @@ private fun LineupSection(m: Match) {
             }
         }
     }
-    if (table.isNotEmpty()) TableCard(table, rowColors)
-    if (knockout.isNotEmpty()) KnockoutCard(knockout, rowColors)
 }
+
+/**
+ * A knockout game as a game the app can show (for its page), when it isn't one the app tracks:
+ * FotMob's teams, score and time; its id marks it as FotMob's.
+ */
+private fun FotMob.TieGame.asMatch(league: String) = Match(
+    id = "fotmob:$id", dateMillis = startMillis, home = home, away = away,
+    homeScore = homeScore, awayScore = awayScore, league = league,
+    state = when { finished -> "post"; started -> "in"; else -> "pre" }, completed = finished, fotmobId = id,
+)
 
 /** The goals in order: home team's on the left, away team's on the right, with assists. */
 @Composable
@@ -1475,7 +1519,7 @@ private fun TableCard(rows: List<FotMob.TableRow>, colors: Map<String, Color>) {
 
 /** The knockout rounds: each tie with its score once started (winner in bold), else its first date. */
 @Composable
-private fun KnockoutCard(rounds: List<FotMob.Round>, colors: Map<String, Color>) {
+private fun KnockoutCard(rounds: List<FotMob.Round>, colors: Map<String, Color>, onOpenGame: (FotMob.TieGame) -> Unit) {
     val dateFmt = remember { DateTimeFormatter.ofPattern("EEE, MMM d") }
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -1506,6 +1550,24 @@ private fun KnockoutCard(rounds: List<FotMob.Round>, colors: Map<String, Color>)
                         ).joinToString(Streaming.DOT)
                         if (note.isNotBlank()) Text(note, style = MaterialTheme.typography.bodySmall, color = ink.copy(alpha = 0.8f),
                             modifier = Modifier.align(Alignment.CenterHorizontally))
+                        // Each game of the tie (legs, or a best-of series): tap for its page.
+                        t.games.forEach { g ->
+                            Row(Modifier.fillMaxWidth().padding(top = 4.dp).clip(RoundedCornerShape(8.dp))
+                                .border(1.dp, ink.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
+                                .clickable { onOpenGame(g) }.padding(horizontal = 10.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically) {
+                                Text(dateFmt.format(Instant.ofEpochMilli(g.startMillis).atZone(ZoneId.systemDefault())),
+                                    style = MaterialTheme.typography.bodySmall, color = ink.copy(alpha = 0.8f), modifier = Modifier.width(86.dp))
+                                Text(g.home, Modifier.weight(1f), color = ink, style = MaterialTheme.typography.bodyMedium,
+                                    textAlign = TextAlign.End, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(if (g.homeScore != null) "${g.homeScore} – ${g.awayScore}" else "vs", color = ink,
+                                    style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 8.dp))
+                                Text(g.away, Modifier.weight(1f), color = ink, style = MaterialTheme.typography.bodyMedium,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Open this game", Modifier.size(18.dp), tint = ink)
+                            }
+                        }
                     }
                 }
             }
