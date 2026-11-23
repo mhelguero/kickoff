@@ -20,6 +20,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.app.NotificationManagerCompat
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Box
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalDensity
@@ -671,13 +672,14 @@ private fun LazyListScope.dayGames(prefix: String, games: List<Match>, state: Ap
 }
 
 /**
- * Text on the home cards stays the size it is with the phone's default font size, so a larger
- * font size setting doesn't make every card much taller. Game pages still follow the setting.
+ * Text on the home cards is never bigger than with the phone's default font size, so a larger
+ * font size setting doesn't make every card much taller; a smaller setting still makes it smaller.
+ * Game pages follow the setting either way.
  */
 @Composable
 private fun DefaultFontSize(content: @Composable () -> Unit) {
     val d = LocalDensity.current
-    CompositionLocalProvider(LocalDensity provides Density(d.density, fontScale = 1f), content = content)
+    CompositionLocalProvider(LocalDensity provides Density(d.density, fontScale = minOf(d.fontScale, 1f)), content = content)
 }
 
 /** A followed league's games on one day: a line each (time or score, teams, alerts bell); tap for the game. */
@@ -685,14 +687,18 @@ private fun DefaultFontSize(content: @Composable () -> Unit) {
 private fun LeagueGamesCard(league: String, games: List<Match>, muted: (Match) -> Boolean?, onOpenMatch: (String) -> Unit) = DefaultFontSize {
     val context = LocalContext.current
     Card(Modifier.fillMaxWidth(), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
-        Column(Modifier.padding(vertical = 12.dp)) {
+        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text("🏆 $league", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
+            // Each game is its own tile, so it's clear what a tap opens.
             games.forEach { m ->
-                Row(Modifier.fillMaxWidth().clickable { onOpenMatch(m.id) }.padding(horizontal = 16.dp, vertical = 6.dp),
+                Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(10.dp))
+                    .clickable { onOpenMatch(m.id) }.padding(horizontal = 10.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically) {
                     // Kickoff time, the minute while live, or "FT".
-                    Box(Modifier.width(64.dp)) {
+                    Box(Modifier.width(56.dp)) {
                         when (m.state) {
                             "in" -> LiveBadge(m.statusLabel.removePrefix("LIVE ").trim())
                             "post" -> Text(m.statusLabel.ifEmpty { "FT" }, style = MaterialTheme.typography.labelLarge,
@@ -700,14 +706,13 @@ private fun LeagueGamesCard(league: String, games: List<Match>, muted: (Match) -
                             else -> Text(m.kickoffTime(), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
                         }
                     }
-                    Text(m.home, Modifier.weight(1f), textAlign = TextAlign.End, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    TeamName(m.home, MaterialTheme.typography.bodyLarge, TextAlign.End, Modifier.weight(1f), bold = false)
                     Text(if (m.state != "pre" && m.homeScore != null) "${m.homeScore} – ${m.awayScore}" else "vs",
                         Modifier.width(56.dp), textAlign = TextAlign.Center, fontWeight = FontWeight.Bold)
-                    Text(m.away, Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    TeamName(m.away, MaterialTheme.typography.bodyLarge, TextAlign.Start, Modifier.weight(1f), bold = false)
                     // Alerts for this game: off until turned on (finished games have none).
                     val off = muted(m)
-                    if (off == null) Spacer(Modifier.width(32.dp))
-                    else IconButton(onClick = {
+                    if (off != null) IconButton(onClick = {
                         Store.setMuted(m.id, !off)
                         Tracker.scheduleNextWatch(context)
                         Toast.makeText(context, if (off) "Alerts on for ${m.title}" else "Alerts off for ${m.title}",
@@ -735,10 +740,10 @@ private fun GameCard(m: Match, teams: List<Team>, muted: Boolean? = null, onClic
         // The outline keeps white cards visible on a light screen.
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
-        Column(Modifier.padding(20.dp)) {
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 // The followed team's crest (the one whose color the card has), then the competition.
-                teams.firstOrNull { it.id in m.teamIds }?.let { TeamCrest(it.id, background, size = 40.dp, gap = 12.dp) }
+                teams.firstOrNull { it.id in m.teamIds }?.let { TeamCrest(it.id, background, size = 32.dp, gap = 10.dp) }
                 Text(m.league, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold,
                     modifier = Modifier.weight(1f))
                 // Just the minute ("63'") or "HT": the Live section already says it's live.
@@ -755,17 +760,17 @@ private fun GameCard(m: Match, teams: List<Team>, muted: Boolean? = null, onClic
                         Tracker.scheduleNextWatch(context)
                         Toast.makeText(context, if (off) "Alerts on for ${m.title}" else "Alerts off for ${m.title}",
                             Toast.LENGTH_SHORT).show()
-                    }, modifier = Modifier.size(36.dp)) {
+                    }, modifier = Modifier.size(32.dp)) {
                         if (off) Icon(painterResource(R.drawable.ic_bell_off), "Turn alerts on", tint = content.copy(alpha = 0.7f))
                         else Icon(Icons.Default.Notifications, "Turn alerts off", tint = content)
                     }
                 }
             }
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(4.dp))
             TeamsLine(m)
             // Where to watch only matters before and during the game.
             if (m.state != "post") {
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(4.dp))
                 Text("📺 " + Streaming.summary(m, Streaming.DOT).ifEmpty { "Broadcaster not listed yet" }, style = MaterialTheme.typography.bodyLarge,
                     color = content.copy(alpha = 0.8f))
             }
@@ -945,10 +950,33 @@ private fun TeamsLine(m: Match) {
     val style = MaterialTheme.typography.titleLarge
     val middle = if (m.state != "pre" && m.homeScore != null) "${m.homeScore} – ${m.awayScore}" else "vs"
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(m.home, style = style, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f), textAlign = TextAlign.Start)
+        TeamName(m.home, style, TextAlign.Start, Modifier.weight(1f))
         Text(middle, style = style, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center,
             modifier = Modifier.padding(horizontal = 10.dp).widthIn(min = 56.dp))
-        Text(m.away, style = style, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f), textAlign = TextAlign.End)
+        TeamName(m.away, style, TextAlign.End, Modifier.weight(1f))
+    }
+}
+
+/**
+ * A team's name, wrapping between words only: if its longest word ("Earthquakes") doesn't fit the
+ * space, the text gets smaller until it does, rather than leaving a letter or two on a line of their own.
+ */
+@Composable
+private fun TeamName(name: String, style: TextStyle, align: TextAlign, modifier: Modifier, bold: Boolean = true) {
+    BoxWithConstraints(modifier) {
+        val measurer = rememberTextMeasurer()
+        val longest = name.split(' ').maxByOrNull { it.length }.orEmpty()
+        val width = constraints.maxWidth
+        val weight = if (bold) FontWeight.Bold else FontWeight.Normal
+        val fitted = remember(name, width, style, bold) {
+            var size = style.fontSize
+            while (size.value > 12f &&
+                measurer.measure(longest, style.copy(fontSize = size, fontWeight = weight), softWrap = false).size.width > width) {
+                size = (size.value - 1f).sp
+            }
+            style.copy(fontSize = size, lineHeight = size * 1.15f)
+        }
+        Text(name, style = fitted, fontWeight = weight, textAlign = align, modifier = Modifier.fillMaxWidth())
     }
 }
 
