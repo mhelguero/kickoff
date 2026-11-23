@@ -78,7 +78,8 @@ object News {
                 // searches use a small daily allowance, too small for a whole league's games).
                 val leagueItems = leagues.map { l ->
                     async(Dispatchers.IO) {
-                        val fotmobId = l.fotmobId.ifBlank { runCatching { FotMob.findLeague(l.name, l.slug) }.getOrNull().orEmpty() }
+                        val games = Store.state.value.matches.values.filter { it.leagueSlug == l.slug }
+                        val fotmobId = l.fotmobId.ifBlank { runCatching { FotMob.findLeague(l.name, l.slug, games) }.getOrNull().orEmpty() }
                         listOf(
                             async { runCatching { leagueHighlights(l, fotmobId, highlightsSince) }.onFailure { Log.w("News", "highlights ${l.name}", it) }.getOrDefault(emptyList()) },
                             async { runCatching { fotmobNews(fotmobId, "league", l.key, since) }.onFailure { Log.w("News", "FotMob ${l.name}", it) }.getOrDefault(emptyList()) },

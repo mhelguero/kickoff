@@ -130,6 +130,8 @@ object Espn {
             clock = status.str("displayClock") ?: "",
             broadcasts = broadcasts,
             teamIds = competitors.mapNotNull { it["team"].obj.str("id") },
+            homeId = home["team"].obj.str("id").orEmpty(),
+            awayId = away["team"].obj.str("id").orEmpty(),
             timeValid = ((comp["timeValid"] ?: event["timeValid"]) as? JsonPrimitive)?.contentOrNull != "false",
         )
     }

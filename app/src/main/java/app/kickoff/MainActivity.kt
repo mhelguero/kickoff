@@ -707,8 +707,10 @@ private fun LeagueGamesCard(league: String, games: List<Match>, muted: (Match) -
                         }
                     }
                     TeamName(m.home, MaterialTheme.typography.bodyLarge, TextAlign.End, Modifier.weight(1f), bold = false)
+                    SmallCrest(m.homeId, Modifier.padding(start = 6.dp))
                     Text(if (m.state != "pre" && m.homeScore != null) "${m.homeScore} – ${m.awayScore}" else "vs",
                         Modifier.width(56.dp), textAlign = TextAlign.Center, fontWeight = FontWeight.Bold)
+                    SmallCrest(m.awayId, Modifier.padding(end = 6.dp))
                     TeamName(m.away, MaterialTheme.typography.bodyLarge, TextAlign.Start, Modifier.weight(1f), bold = false)
                     // Alerts for this game: off until turned on (finished games have none).
                     val off = muted(m)
@@ -760,9 +762,10 @@ private fun GameCard(m: Match, teams: List<Team>, muted: Boolean? = null, onClic
                         Tracker.scheduleNextWatch(context)
                         Toast.makeText(context, if (off) "Alerts on for ${m.title}" else "Alerts off for ${m.title}",
                             Toast.LENGTH_SHORT).show()
-                    }, modifier = Modifier.size(32.dp)) {
-                        if (off) Icon(painterResource(R.drawable.ic_bell_off), "Turn alerts on", tint = content.copy(alpha = 0.7f))
-                        else Icon(Icons.Default.Notifications, "Turn alerts off", tint = content)
+                    }, modifier = Modifier.size(36.dp)) {
+                        // A gold bell, so it looks like something to press; faded with a slash when off.
+                        Image(painterResource(if (off) R.drawable.ic_bell_gold_off else R.drawable.ic_bell_gold),
+                            if (off) "Turn alerts on" else "Turn alerts off", Modifier.size(30.dp))
                     }
                 }
             }
@@ -922,6 +925,19 @@ private fun TeamCrest(teamId: String, background: Color?, size: Dp = 48.dp, gap:
             modifier = if (hidden) Modifier.size(size).background(Color.White, CircleShape).padding(size / 8)
             else Modifier.size(size))
         Spacer(Modifier.width(gap))
+    }
+}
+
+/** A team's crest at name size, in a fixed space (so names line up while crests load, or if one is missing). */
+@Composable
+private fun SmallCrest(teamId: String, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    val url = "https://a.espncdn.com/i/teamlogos/soccer/500/$teamId.png"
+    val crest by produceState<ImageBitmap?>(null, url) {
+        if (teamId.isNotBlank()) value = withContext(Dispatchers.IO) { Logos.load(context, url) }
+    }
+    Box(modifier.size(22.dp)) {
+        crest?.let { Image(it, contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize()) }
     }
 }
 

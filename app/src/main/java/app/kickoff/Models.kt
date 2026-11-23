@@ -34,6 +34,8 @@ data class Match(
     val timeValid: Boolean = true,      // false when ESPN has a date but no confirmed kickoff time
     val fotmobId: String = "",          // the same game on FotMob
     val tv: Map<String, List<String>> = emptyMap(), // FotMob channels by country code ("US", "ES", ...)
+    val homeId: String = "",            // ESPN team ids, for crests
+    val awayId: String = "",
 ) {
     val title get() = "$home vs $away"
 

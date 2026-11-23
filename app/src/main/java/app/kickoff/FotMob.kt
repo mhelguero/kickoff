@@ -28,6 +28,7 @@ object FotMob {
         val score: String = "",        // e.g. "2 - 3" once played
         val finished: Boolean = false,
         val tournament: String = "",   // e.g. "LaLiga", "Champions League"
+        val leagueId: String = "",     // the competition's FotMob id
     )
 
     /**
@@ -162,6 +163,8 @@ object FotMob {
         val facts = content["matchFacts"].obj
         val goals = facts["events"].obj["events"].arr.map { it.obj }
             .filter { it.str("type") == "Goal" && it.str("isPenaltyShootoutEvent") != "true" }
+            // In order of the minute (FotMob sometimes lists a goal out of order, e.g. 25' before 23').
+            .sortedWith(compareBy({ it.str("time")?.toIntOrNull() ?: 0 }, { it.str("overloadTime")?.toIntOrNull() ?: 0 }))
             .map { e ->
                 val minute = e.str("timeStr")?.replace(" ", "")?.let { if (it.endsWith("'")) it else "$it'" }
                     ?: "${e.str("time").orEmpty()}${e.str("overloadTime")?.let { "+$it" }.orEmpty()}'"
@@ -322,19 +325,46 @@ object FotMob {
                 Fixture(id, OffsetDateTime.parse(time).toInstant().toEpochMilli(),
                     home = f.obj["home"].obj.str("name").orEmpty(), away = f.obj["away"].obj.str("name").orEmpty(),
                     score = status.str("scoreStr").orEmpty(), finished = status.str("finished") == "true",
-                    tournament = f.obj["tournament"].obj.str("name").orEmpty())
+                    tournament = f.obj["tournament"].obj.str("name").orEmpty(),
+                    leagueId = f.obj["tournament"].obj.str("leagueId").orEmpty())
             }.getOrNull()
         }
 
     /**
-     * FotMob's league for an ESPN one, by name; with several of that name (England's and Egypt's
-     * Premier League), the one of ESPN's country ("eng.1" -> ENG). Null if none.
+     * FotMob's league for an ESPN one. By name first: ESPN's names add the country and sponsors
+     * ("Spanish LALIGA", "Mexican Liga BBVA MX") that FotMob's search doesn't know, so shorter forms
+     * are tried too ("LALIGA", "Liga MX"), the league of ESPN's country first ("esp.1" -> ESP). A
+     * candidate counts only if one of the league's [games] is among its games. Then, if none: the
+     * league one of those games' teams plays that game in. Null if not found.
      */
-    fun findLeague(name: String, slug: String): String? {
+    fun findLeague(name: String, slug: String, games: List<Match>): String? {
         val country = slug.substringBefore('.').uppercase()
-        val leagues = get("$BASE/search/suggest?term=${URLEncoder.encode(name, "UTF-8")}&lang=en").arr
-            .flatMap { it.obj["suggestions"].arr }.map { it.obj }.filter { it.str("type") == "league" }
-        return (leagues.firstOrNull { it.str("ccode") == country } ?: leagues.firstOrNull())?.str("id")
+        val noCountry = name.substringAfter(' ', name)
+        val names = listOf(name, noCountry, noCountry.replace("BBVA", "").replace(Regex("\\s+"), " ").trim(),
+            noCountry.split(' ').filter { it.uppercase() != "BBVA" }.let { w -> if (w.size > 2) "${w.first()} ${w.last()}" else "" })
+            .filter { it.isNotBlank() }.distinct()
+        val tried = mutableSetOf<String>()
+        for (n in names) {
+            val leagues = runCatching {
+                get("$BASE/search/suggest?term=${URLEncoder.encode(n, "UTF-8")}&lang=en").arr
+                    .flatMap { it.obj["suggestions"].arr }.map { it.obj }.filter { it.str("type") == "league" }
+            }.getOrDefault(emptyList())
+            val ids = leagues.sortedBy { it.str("ccode") != country }.mapNotNull { it.str("id") }.distinct().filter { tried.add(it) }
+            for (id in ids.take(3)) {
+                if (games.isEmpty()) return id
+                val list = runCatching { leagueFixtures(id) }.getOrNull() ?: continue
+                if (games.any { sameGame(list, it) != null }) return id
+            }
+        }
+        // By a team: its game at that time names the competition.
+        for (g in games.take(3)) {
+            for (team in runCatching { findTeams(g.home) }.getOrDefault(emptyList()).take(3)) {
+                val f = runCatching { fixtures(team) }.getOrNull()
+                    ?.firstOrNull { Math.abs(it.startMillis - g.dateMillis) <= 15 * 60_000L && it.leagueId.isNotBlank() }
+                if (f != null) return f.leagueId
+            }
+        }
+        return null
     }
 
     /**

@@ -185,14 +185,22 @@ object Tracker {
                 m.leagueSlug == league.slug && m.state != "post" && m.dateMillis <= now + 14 * 24 * HOUR
             }
             if (!needed) continue
+            val games = Store.state.value.matches.values.filter { it.leagueSlug == league.slug }.sortedBy { abs(it.dateMillis - now) }
             var id = league.fotmobId
             if (id.isBlank()) {
-                id = runCatching { FotMob.findLeague(league.name, league.slug) }.onFailure(failed("league search")).getOrNull()
+                id = runCatching { FotMob.findLeague(league.name, league.slug, games) }.onFailure(failed("league search")).getOrNull()
                     ?: continue
                 val found = id
                 Store.update { s -> s.copy(leagues = s.leagues.map { if (it.slug == league.slug) it.copy(fotmobId = found) else it }) }
             }
-            runCatching { FotMob.leagueFixtures(id) }.onSuccess { leagueFixtures[league.slug] = it }.onFailure(failed("league games"))
+            val list = runCatching { FotMob.leagueFixtures(id) }.onFailure(failed("league games")).getOrNull() ?: continue
+            // None of its games there: the wrong league was picked; forget it so the next refresh looks again.
+            if (games.isNotEmpty() && games.none { FotMob.sameGame(list, it) != null }) {
+                Log.w(TAG, "FotMob league $id isn't ${league.name}: searching again")
+                Store.update { s -> s.copy(leagues = s.leagues.map { if (it.slug == league.slug) it.copy(fotmobId = "") else it }) }
+                continue
+            }
+            leagueFixtures[league.slug] = list
         }
         val s0 = Store.state.value
         val teamsFound = "${s0.teams.count { it.fotmobId.isNotBlank() }}/${s0.teams.size} teams"
