@@ -51,8 +51,10 @@ object Espn {
             .map { it.obj }
             .filter { it.str("sport") == "soccer" }
             .mapNotNull { c ->
-                // The league's code is the end of its page's address: .../league/_/name/eng.1
-                val slug = c["link"]?.obj?.str("web")?.substringAfter("/name/", "")?.substringBefore("/")?.takeIf { it.isNotEmpty() }
+                // The league's code ("eng.1", "fifa.world"): given as defaultLeagueSlug, else the end of
+                // its page's address (.../league/_/name/eng.1).
+                val slug = c.str("defaultLeagueSlug")?.takeIf { it.isNotBlank() }
+                    ?: c["link"]?.obj?.str("web")?.substringAfter("/name/", "")?.substringBefore("/")?.takeIf { it.isNotEmpty() }
                 val name = c.str("displayName")
                 if (slug == null || name == null) null else League(slug, name)
             }

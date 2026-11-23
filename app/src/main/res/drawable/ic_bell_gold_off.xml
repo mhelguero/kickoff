@@ -51,7 +51,7 @@
     <!-- Shine -->
     <path android:pathData="M9.4,6.4 C8.7,7.3 8.4,8.4 8.4,9.6 L8.4,13.4" android:strokeColor="#FFFFFFFF" android:strokeAlpha="0.35"
         android:strokeWidth="1" android:strokeLineCap="round" />
-    <!-- The slash: alerts off. A light edge keeps it visible on dark cards. -->
+    <!-- The red slash: alerts off. A light edge keeps it visible on dark and red cards. -->
     <path android:pathData="M3.6,2.6 L20.4,21.4" android:strokeColor="#FFFFFFFF" android:strokeWidth="3.4" android:strokeLineCap="round" />
-    <path android:pathData="M3.6,2.6 L20.4,21.4" android:strokeColor="#FF4E3B00" android:strokeWidth="1.9" android:strokeLineCap="round" />
+    <path android:pathData="M3.6,2.6 L20.4,21.4" android:strokeColor="#FFD32F2F" android:strokeWidth="1.9" android:strokeLineCap="round" />
 </vector>

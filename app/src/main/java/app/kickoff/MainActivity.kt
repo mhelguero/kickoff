@@ -71,6 +71,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowUp
@@ -282,13 +283,22 @@ private fun Root(openMatch: String?, onOpenMatch: (String?) -> Unit, needsSetup:
     // The home screen's state (tab, scroll position, open sections) is kept while a game's page
     // is open, so Back returns to exactly where the user was.
     val saved = rememberSaveableStateHolder()
+    // A followed league's own page (its name tapped on a league card), its code; a game opened from
+    // it comes back to it.
+    var openLeague by rememberSaveable { mutableStateOf<String?>(null) }
     val match = openMatch?.let { state.matches[it] }
+    val league = openLeague?.let { slug -> state.leagues.firstOrNull { it.slug == slug } }
     if (match != null) {
         BackHandler { onOpenMatch(null) }
         MatchScreen(match, onBack = { onOpenMatch(null) })
+    } else if (league != null) {
+        BackHandler { openLeague = null }
+        saved.SaveableStateProvider("league-${league.slug}") {
+            LeagueScreen(league, state, onBack = { openLeague = null }, onOpenMatch = onOpenMatch)
+        }
     } else {
         saved.SaveableStateProvider("home") {
-            HomeScreen(state, refreshing, ::refresh, onOpenMatch, needsSetup, onFixSetup)
+            HomeScreen(state, refreshing, ::refresh, onOpenMatch, needsSetup, onFixSetup, onOpenLeague = { openLeague = it })
         }
     }
 }
@@ -310,6 +320,7 @@ private fun HomeScreen(
     onOpenMatch: (String) -> Unit,
     needsSetup: Boolean,
     onFixSetup: () -> Unit,
+    onOpenLeague: (String) -> Unit,
 ) {
     val context = LocalContext.current
     var showSearch by remember { mutableStateOf(false) }
@@ -583,7 +594,7 @@ private fun HomeScreen(
                 } else {
                     if (live.isNotEmpty()) {
                         item(key = "live-header") { SectionHeader("Live") }
-                        dayGames("live", live, state, onOpenMatch)
+                        dayGames("live", live, state, onOpenMatch, onOpenLeague)
                     }
                     // Played since the start of last week (Sunday), newest first, folded away until tapped.
                     if (ended.isNotEmpty()) {
@@ -600,14 +611,14 @@ private fun HomeScreen(
                         }
                         if (endedOpen) ended.groupBy { it.zoned().toLocalDate() }.forEach { (day, dayGames) ->
                             item(key = "ended-day-$day") { DayDivider(dividerFmt.format(day)) }
-                            dayGames("ended-$day", dayGames, state, onOpenMatch)
+                            dayGames("ended-$day", dayGames, state, onOpenMatch, onOpenLeague)
                         }
                     }
                     item(key = "upcoming-header") { Column { SectionHeader("Upcoming"); SectionLine() } }
                     if (upcoming.isEmpty()) item { Hint(if (refreshing) "Loading…" else "No upcoming games found.") }
                     upcoming.groupBy { it.zoned().toLocalDate() }.forEach { (day, dayGames) ->
                         item(key = "day-$day") { DayDivider(dividerFmt.format(day)) }
-                        dayGames("day-$day", dayGames, state, onOpenMatch)
+                        dayGames("day-$day", dayGames, state, onOpenMatch, onOpenLeague)
                     }
                 }
             }
@@ -656,10 +667,70 @@ private fun HomeScreen(
 }
 
 /**
+ * A followed league's (or cup's) page: like the home screen's Games, but every game of the league,
+ * each as a full card (Live, Ended folded away until tapped, Upcoming by day). Back returns home.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun LeagueScreen(league: League, state: AppState, onBack: () -> Unit, onOpenMatch: (String) -> Unit) {
+    var endedOpen by rememberSaveable { mutableStateOf(false) }
+    val today = LocalDate.now()
+    val games = state.matches.values.filter { it.leagueSlug == league.slug }.sortedBy { it.dateMillis }
+    val live = games.filter { it.state == "in" }
+    val upcoming = games.filter { it.state == "pre" && !it.zoned().toLocalDate().isBefore(today) }
+    val ended = games.filter { it.state == "post" && it.completed }.reversed()
+    fun muted(m: Match) = if (m.state == "post") null else state.alerts[m.id]?.muted == true
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("🏆 ${league.name}", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
+            )
+        },
+    ) { pad ->
+        LazyColumn(
+            Modifier.fillMaxSize().padding(pad).wrapContentWidth().widthIn(max = MAX_CONTENT_WIDTH).fillMaxWidth(),
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            if (live.isNotEmpty()) {
+                item(key = "live-header") { SectionHeader("Live") }
+                items(live, key = { "live-${it.id}" }) { m -> GameCard(m, state.teams, muted(m)) { onOpenMatch(m.id) } }
+            }
+            if (ended.isNotEmpty()) {
+                item(key = "ended-header") {
+                    Column(Modifier.fillMaxWidth().clickable { endedOpen = !endedOpen }.padding(top = 8.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("Ended", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold,
+                                modifier = Modifier.weight(1f))
+                            Icon(if (endedOpen) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                if (endedOpen) "Hide ended games" else "Show ended games")
+                        }
+                        SectionLine()
+                    }
+                }
+                if (endedOpen) ended.groupBy { it.zoned().toLocalDate() }.forEach { (day, dayGames) ->
+                    item(key = "ended-day-$day") { DayDivider(dividerFmt.format(day)) }
+                    items(dayGames, key = { "ended-${it.id}" }) { m -> GameCard(m, state.teams) { onOpenMatch(m.id) } }
+                }
+            }
+            item(key = "upcoming-header") { Column { SectionHeader("Upcoming"); SectionLine() } }
+            if (upcoming.isEmpty()) item { Hint("No games in the next two weeks.") }
+            upcoming.groupBy { it.zoned().toLocalDate() }.forEach { (day, dayGames) ->
+                item(key = "day-$day") { DayDivider(dividerFmt.format(day)) }
+                items(dayGames, key = { "up-${it.id}" }) { m -> GameCard(m, state.teams, muted(m)) { onOpenMatch(m.id) } }
+            }
+        }
+    }
+}
+
+/**
  * One day's (or the Live section's) games: followed teams' games as full cards, then each followed
  * league's other games together in one card per league.
  */
-private fun LazyListScope.dayGames(prefix: String, games: List<Match>, state: AppState, onOpenMatch: (String) -> Unit) {
+private fun LazyListScope.dayGames(
+    prefix: String, games: List<Match>, state: AppState, onOpenMatch: (String) -> Unit, onOpenLeague: (String) -> Unit,
+) {
     val followed = state.teams.map { it.id }.toSet()
     val (teamGames, leagueGames) = games.partition { m -> m.teamIds.any { it in followed } }
     // Finished games have no alerts left, so no bell.
@@ -667,7 +738,7 @@ private fun LazyListScope.dayGames(prefix: String, games: List<Match>, state: Ap
     items(teamGames, key = { "$prefix-${it.id}" }) { m -> GameCard(m, state.teams, muted(m)) { onOpenMatch(m.id) } }
     leagueGames.groupBy { it.leagueSlug }.forEach { (slug, list) ->
         val name = state.leagues.firstOrNull { it.slug == slug }?.name ?: list.first().league
-        item(key = "$prefix-league-$slug") { LeagueGamesCard(name, list, { muted(it) }, onOpenMatch) }
+        item(key = "$prefix-league-$slug") { LeagueGamesCard(name, list, { muted(it) }, onOpenMatch) { onOpenLeague(slug) } }
     }
 }
 
@@ -684,12 +755,19 @@ private fun DefaultFontSize(content: @Composable () -> Unit) {
 
 /** A followed league's games on one day: a line each (time or score, teams, alerts bell); tap for the game. */
 @Composable
-private fun LeagueGamesCard(league: String, games: List<Match>, muted: (Match) -> Boolean?, onOpenMatch: (String) -> Unit) = DefaultFontSize {
+private fun LeagueGamesCard(
+    league: String, games: List<Match>, muted: (Match) -> Boolean?, onOpenMatch: (String) -> Unit, onOpenLeague: () -> Unit,
+) = DefaultFontSize {
     val context = LocalContext.current
     Card(Modifier.fillMaxWidth(), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("🏆 $league", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
+            // The league's name opens its page, with all its games.
+            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable(onClick = onOpenLeague)
+                .padding(horizontal = 6.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("🏆 $league", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f))
+                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, "All of its games", Modifier.size(20.dp))
+            }
             // Each game is its own tile, so it's clear what a tap opens.
             games.forEach { m ->
                 Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
@@ -703,15 +781,17 @@ private fun LeagueGamesCard(league: String, games: List<Match>, muted: (Match) -
                             "in" -> LiveBadge(m.statusLabel.removePrefix("LIVE ").trim())
                             "post" -> Text(m.statusLabel.ifEmpty { "FT" }, style = MaterialTheme.typography.labelLarge,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            else -> Text(m.kickoffTime(), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+                            // On one line ("10:45 PM"), a bit smaller than the names.
+                            else -> Text(m.kickoffTime(), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold,
+                                maxLines = 1, softWrap = false)
                         }
                     }
-                    TeamName(m.home, MaterialTheme.typography.bodyLarge, TextAlign.End, Modifier.weight(1f), bold = false)
-                    SmallCrest(m.homeId, Modifier.padding(start = 6.dp))
+                    TeamName(m.home, MaterialTheme.typography.bodyMedium, TextAlign.End, Modifier.weight(1f), bold = false)
+                    SmallCrest(m.homeId, Modifier.padding(start = 4.dp))
                     Text(if (m.state != "pre" && m.homeScore != null) "${m.homeScore} – ${m.awayScore}" else "vs",
-                        Modifier.width(56.dp), textAlign = TextAlign.Center, fontWeight = FontWeight.Bold)
-                    SmallCrest(m.awayId, Modifier.padding(end = 6.dp))
-                    TeamName(m.away, MaterialTheme.typography.bodyLarge, TextAlign.Start, Modifier.weight(1f), bold = false)
+                        Modifier.width(40.dp), textAlign = TextAlign.Center, fontWeight = FontWeight.Bold)
+                    SmallCrest(m.awayId, Modifier.padding(end = 4.dp))
+                    TeamName(m.away, MaterialTheme.typography.bodyMedium, TextAlign.Start, Modifier.weight(1f), bold = false)
                     // Alerts for this game: off until turned on (finished games have none).
                     val off = muted(m)
                     if (off != null) IconButton(onClick = {
@@ -719,7 +799,7 @@ private fun LeagueGamesCard(league: String, games: List<Match>, muted: (Match) -
                         Tracker.scheduleNextWatch(context)
                         Toast.makeText(context, if (off) "Alerts on for ${m.title}" else "Alerts off for ${m.title}",
                             Toast.LENGTH_SHORT).show()
-                    }, modifier = Modifier.size(32.dp)) {
+                    }, modifier = Modifier.size(28.dp)) {
                         if (off) Icon(painterResource(R.drawable.ic_bell_off), "Turn alerts on",
                             tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
                         else Icon(Icons.Default.Notifications, "Turn alerts off", modifier = Modifier.size(20.dp))
@@ -762,10 +842,10 @@ private fun GameCard(m: Match, teams: List<Team>, muted: Boolean? = null, onClic
                         Tracker.scheduleNextWatch(context)
                         Toast.makeText(context, if (off) "Alerts on for ${m.title}" else "Alerts off for ${m.title}",
                             Toast.LENGTH_SHORT).show()
-                    }, modifier = Modifier.size(36.dp)) {
-                        // A gold bell, so it looks like something to press; faded with a slash when off.
+                    }, modifier = Modifier.size(32.dp)) {
+                        // A gold bell, so it looks like something to press; faded with a red slash when off.
                         Image(painterResource(if (off) R.drawable.ic_bell_gold_off else R.drawable.ic_bell_gold),
-                            if (off) "Turn alerts on" else "Turn alerts off", Modifier.size(30.dp))
+                            if (off) "Turn alerts on" else "Turn alerts off", Modifier.size(24.dp))
                     }
                 }
             }
@@ -936,7 +1016,7 @@ private fun SmallCrest(teamId: String, modifier: Modifier = Modifier) {
     val crest by produceState<ImageBitmap?>(null, url) {
         if (teamId.isNotBlank()) value = withContext(Dispatchers.IO) { Logos.load(context, url) }
     }
-    Box(modifier.size(22.dp)) {
+    Box(modifier.size(18.dp)) {
         crest?.let { Image(it, contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize()) }
     }
 }
@@ -986,7 +1066,7 @@ private fun TeamName(name: String, style: TextStyle, align: TextAlign, modifier:
         val weight = if (bold) FontWeight.Bold else FontWeight.Normal
         val fitted = remember(name, width, style, bold) {
             var size = style.fontSize
-            while (size.value > 12f &&
+            while (size.value > 9f &&
                 measurer.measure(longest, style.copy(fontSize = size, fontWeight = weight), softWrap = false).size.width > width) {
                 size = (size.value - 1f).sp
             }
@@ -1081,10 +1161,10 @@ private fun LineupSection(m: Match) {
             })
         }
     }
-    // The league table (finished games only), loaded after the rest.
+    // The league table (any game: upcoming, live or finished), loaded after the rest.
     val table by produceState<List<FotMob.TableRow>>(emptyList(), details?.tableLeague) {
         val d = details ?: return@produceState
-        if (m.state != "post" || d.tableLeague == null) return@produceState
+        if (d.tableLeague == null) return@produceState
         value = withContext(Dispatchers.IO) { runCatching { FotMob.table(d.tableLeague, d.teamIds) }.getOrDefault(emptyList()) }
     }
     // The competition's knockout bracket, if it has one with known teams (any game in it).
@@ -1545,20 +1625,20 @@ private fun TeamSearchDialog(onDismiss: () -> Unit) {
     }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (leaguesTab) "Add a league" else "Add a team") },
+        title = { Text(if (leaguesTab) "Add a league or cup" else "Add a team") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterChip(selected = !leaguesTab, onClick = { leaguesTab = false }, label = { Text("Teams") })
-                    FilterChip(selected = leaguesTab, onClick = { leaguesTab = true }, label = { Text("Leagues") })
+                    FilterChip(selected = leaguesTab, onClick = { leaguesTab = true }, label = { Text("Leagues & cups") })
                 }
-                OutlinedTextField(query, { query = it }, label = { Text(if (leaguesTab) "League name" else "Team name") }, singleLine = true)
+                OutlinedTextField(query, { query = it }, label = { Text(if (leaguesTab) "League or cup, e.g. World Cup" else "Team name") }, singleLine = true)
                 val empty = if (leaguesTab) leagues.isEmpty() else teams.isEmpty()
                 val hint = when {
                     loading -> "Searching…"
                     failed -> "Couldn't search. Check your connection."
-                    query.trim().length >= 3 && empty -> if (leaguesTab) "No soccer leagues found." else "No soccer teams found."
-                    leaguesTab && query.trim().length < 3 -> "Every game of a league shows, with alerts off until you turn a game's bell on."
+                    query.trim().length >= 3 && empty -> if (leaguesTab) "No soccer leagues or cups found." else "No soccer teams found."
+                    leaguesTab && query.trim().length < 3 -> "Leagues and cups (World Cup, Champions League, FA Cup...): every game shows, with alerts off until you turn a game's bell on."
                     else -> null
                 }
                 hint?.let { Text(it, Modifier.padding(top = 8.dp), color = MaterialTheme.colorScheme.onSurfaceVariant) }
