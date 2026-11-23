@@ -36,10 +36,35 @@ object Espn {
     // Without a limit ESPN returns only the first 100 games, which a busy Saturday exceeds.
     fun scoreboard(day: String): List<Match> = schedule("$BASE/scoreboard?dates=$day&limit=1000")
 
+    /**
+     * A league's games in a month (yyyyMM), finished, live and upcoming. ESPN's league scoreboard
+     * takes a whole month (a range of days is refused).
+     */
+    fun leagueGames(slug: String, month: String): List<Match> =
+        schedule("https://site.api.espn.com/apis/site/v2/sports/soccer/$slug/scoreboard?dates=$month&limit=500")
+
+    /** Soccer leagues and cups matching a name, e.g. "premier" -> English Premier League (eng.1), ... */
+    fun searchLeagues(query: String): List<League> {
+        val q = URLEncoder.encode(query, "UTF-8")
+        val root = get("https://site.web.api.espn.com/apis/search/v2?query=$q&limit=50&type=league").obj
+        return root["results"].arr.flatMap { it.obj["contents"].arr }
+            .map { it.obj }
+            .filter { it.str("sport") == "soccer" }
+            .mapNotNull { c ->
+                // The league's code is the end of its page's address: .../league/_/name/eng.1
+                val slug = c["link"]?.obj?.str("web")?.substringAfter("/name/", "")?.substringBefore("/")?.takeIf { it.isNotEmpty() }
+                val name = c.str("displayName")
+                if (slug == null || name == null) null else League(slug, name)
+            }
+            .distinctBy { it.slug }
+    }
+
     private fun schedule(url: String): List<Match> {
         val root = get(url).obj
+        // A league's scoreboard names the league once, at the top, not on each game.
+        val top = root["leagues"].arr.firstOrNull()?.obj
         return root["events"].arr.mapNotNull { e ->
-            runCatching { parseEvent(e.obj, e.obj["competitions"].arr.first().obj, e.obj["league"]?.obj) }
+            runCatching { parseEvent(e.obj, e.obj["competitions"].arr.first().obj, e.obj["league"]?.obj ?: top) }
                 .getOrNull()
         }
     }

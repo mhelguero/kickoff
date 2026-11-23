@@ -38,6 +38,8 @@ private const val LINEUP_STEP_MS = 5 * MIN
 private const val LINEUP_LATE_MS = 15 * MIN
 /** Played games are kept this long: enough for the whole of last week (Sunday to Saturday). */
 private const val KEEP_MS = 15 * 24 * HOUR
+// A followed league's upcoming games are listed this far ahead (a team's, all of them).
+private const val LEAGUE_AHEAD_MS = 14 * 24 * HOUR
 
 object Tracker {
 
@@ -57,6 +59,21 @@ object Tracker {
                     list.filter { it.state == "post" && it.dateMillis > now - KEEP_MS }.forEach { fresh.putIfAbsent(it.id, it) }
                 }
                 .onFailure { Log.w(TAG, "results ${team.name} failed", it) }
+        }
+        // Followed leagues: every game, from ESPN's league scoreboard (a month at a time): this month's
+        // and next month's, and last month's while its games can still be in the Ended section.
+        val leagues = Store.state.value.leagues
+        val monthFmt = DateTimeFormatter.ofPattern("yyyyMM")
+        val months = listOf(now - KEEP_MS, now, now + LEAGUE_AHEAD_MS)
+            .map { monthFmt.format(Instant.ofEpochMilli(it).atZone(ESPN_DAY_ZONE)) }.distinct()
+        for (league in leagues) for (month in months) {
+            runCatching { Espn.leagueGames(league.slug, month) }
+                .onSuccess { list ->
+                    list.filter { m ->
+                        if (m.state == "post") m.dateMillis > now - KEEP_MS else m.dateMillis < now + LEAGUE_AHEAD_MS
+                    }.forEach { fresh.putIfAbsent(it.id, it.copy(leagueSlug = it.leagueSlug.ifBlank { league.slug })) }
+                }
+                .onFailure { Log.w(TAG, "league ${league.slug} $month failed", it) }
         }
         // A game already under way isn't in the fixtures list. Teams with nothing stored yet (just
         // added, or first launch) may be mid-game, so check the scoreboards for the last few hours.
@@ -89,11 +106,14 @@ object Tracker {
             val followed = s.teams.map { it.id }.toSet()
             val merged = fresh.mapValues { (id, f) -> mergeRefresh(s.matches[id], f) }
             val kept = (s.matches + merged).filterValues { m ->
-                m.dateMillis > now - KEEP_MS && m.teamIds.any { it in followed }
+                m.dateMillis > now - KEEP_MS && (m.teamIds.any { it in followed } || s.follows(m))
             }
+            // A followed league's games (other than followed teams') start with alerts off: the bell
+            // on a game's card turns them on.
+            val newLeagueGames = kept.values.filter { m -> m.id !in s.alerts && m.teamIds.none { it in followed } }
             s.copy(
                 matches = kept,
-                alerts = s.alerts.filterKeys { it in kept },
+                alerts = s.alerts.filterKeys { it in kept } + newLeagueGames.associate { it.id to AlertState(muted = true) },
                 // Checked once per team; dropped when unfollowed so re-adding checks again.
                 scoreboardChecked = (s.scoreboardChecked + if (scoreboardOk) newTeams else emptySet())
                     .filter { it in followed }.toSet(),
@@ -158,10 +178,26 @@ object Tracker {
             picked?.let { fixtures[team.id] = it.second }
             Store.update { s -> s.copy(teams = s.teams.map { if (it.id == team.id) it.copy(fotmobId = id) else it }) }
         }
+        // Followed leagues: their games on FotMob, for the games of theirs no followed team plays in.
+        val leagueFixtures = mutableMapOf<String, List<FotMob.Fixture>>()   // ESPN league slug to its FotMob games
+        for (league in Store.state.value.leagues) {
+            val needed = Store.state.value.matches.values.any { m ->
+                m.leagueSlug == league.slug && m.state != "post" && m.dateMillis <= now + 14 * 24 * HOUR
+            }
+            if (!needed) continue
+            var id = league.fotmobId
+            if (id.isBlank()) {
+                id = runCatching { FotMob.findLeague(league.name, league.slug) }.onFailure(failed("league search")).getOrNull()
+                    ?: continue
+                val found = id
+                Store.update { s -> s.copy(leagues = s.leagues.map { if (it.slug == league.slug) it.copy(fotmobId = found) else it }) }
+            }
+            runCatching { FotMob.leagueFixtures(id) }.onSuccess { leagueFixtures[league.slug] = it }.onFailure(failed("league games"))
+        }
         val s0 = Store.state.value
         val teamsFound = "${s0.teams.count { it.fotmobId.isNotBlank() }}/${s0.teams.size} teams"
         // Refused outright (e.g. HTTP 403): don't send a request per game that will be refused too.
-        if (fixtures.isEmpty() && problem.isNotEmpty()) {
+        if (fixtures.isEmpty() && leagueFixtures.isEmpty() && problem.isNotEmpty()) {
             Log.w(TAG, "FotMob: $teamsFound. Error: $problem")
             return
         }
@@ -173,7 +209,8 @@ object Tracker {
             // Same team, kickoff within 3 hours: a team never plays twice that close together.
             val fid = m.fotmobId.ifBlank { null } ?: s0.teams.filter { it.id in m.teamIds }
                 .flatMap { fixtures[it.id].orEmpty() }
-                .firstOrNull { abs(it.startMillis - m.dateMillis) <= 3 * HOUR }?.id ?: continue
+                .firstOrNull { abs(it.startMillis - m.dateMillis) <= 3 * HOUR }?.id
+                ?: leagueFixtures[m.leagueSlug]?.let { FotMob.sameGame(it, m) }?.id ?: continue
             runCatching { FotMob.channels(fid, my) }.onSuccess { found[m.id] = fid to it }.onFailure(failed("channels"))
         }
         Log.i(TAG, "FotMob: $teamsFound, ${found.size} games checked, " +
@@ -266,15 +303,21 @@ object Tracker {
             .copy(broadcasts = broadcasts, fotmobId = old.fotmobId, tv = old.tv)
     }
 
-    /** Games that need live polling right now. */
-    fun gamesToWatch(now: Long = System.currentTimeMillis()): List<Match> {
+    /**
+     * Games that need live polling right now. [withMuted] false: only games with alerts on, for the background alarms (a followed league's
+     * many games, alerts off by default, don't wake the phone every minute). The app's own screen
+     * passes true, so every live score moves while it's open.
+     */
+    fun gamesToWatch(now: Long = System.currentTimeMillis(), withMuted: Boolean = true): List<Match> {
         val s = Store.state.value
-        return s.matches.values.filter { m -> m.dateMillis - WATCH_LEAD_MS <= now && stillOpen(m, s, now) }
+        return s.matches.values.filter { m ->
+            m.dateMillis - WATCH_LEAD_MS <= now && stillOpen(m, s, now) && (withMuted || s.alerts[m.id]?.muted != true)
+        }
     }
 
     /** One polling pass over live games. Returns true if any game still needs watching. */
-    fun pollOnce(context: Context): Boolean {
-        for (m in gamesToWatch()) {
+    fun pollOnce(context: Context, withMuted: Boolean = true): Boolean {
+        for (m in gamesToWatch(withMuted = withMuted)) {
             val live = runCatching { Espn.match(m.id) }
                 .onFailure { Log.w(TAG, "poll ${m.id} failed", it) }
                 .getOrNull() ?: continue
@@ -291,7 +334,7 @@ object Tracker {
             }
             handleTransition(context, merged ?: continue)
         }
-        return gamesToWatch().isNotEmpty()
+        return gamesToWatch(withMuted = withMuted).isNotEmpty()
     }
 
     /**
@@ -381,7 +424,8 @@ object Tracker {
         val now = System.currentTimeMillis()
         val s = Store.state.value
         // Same rules as gamesToWatch and awaitingLineups, so an alarm never fires for nothing to do.
-        val kickoff = s.matches.values.filter { stillOpen(it, s, now) }.minOfOrNull { it.dateMillis - WATCH_LEAD_MS }
+        val kickoff = s.matches.values.filter { stillOpen(it, s, now) && s.alerts[it.id]?.muted != true }
+            .minOfOrNull { it.dateMillis - WATCH_LEAD_MS }
         val lineups = awaitingLineups(s, null).minOfOrNull { it.dateMillis - LINEUP_LEAD_MS }
         val next = listOfNotNull(kickoff, lineups).minOrNull() ?: return
         setWatchAlarm(context, maxOf(next, now + 1000))
@@ -395,12 +439,12 @@ object Tracker {
      */
     fun watchTick(context: Context) {
         val now = System.currentTimeMillis()
-        val live = gamesToWatch(now).isNotEmpty()
+        val live = gamesToWatch(now, withMuted = false).isNotEmpty()
         if (!live && awaitingLineups(Store.state.value, now).isEmpty()) return scheduleNextWatch(context)
         // Set first: if this pass is cut short, the next alarm still comes.
         setWatchAlarm(context, now + if (live) MIN else LINEUP_STEP_MS)
         checkLineups(context, now)
-        val stillLive = live && pollOnce(context)
+        val stillLive = live && pollOnce(context, withMuted = false)
         if (!stillLive) {
             val later = System.currentTimeMillis()
             if (awaitingLineups(Store.state.value, later).isEmpty()) scheduleNextWatch(context)

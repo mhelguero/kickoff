@@ -85,15 +85,36 @@ data class VideoSearch(
     val version: Int = 0,          // News.SEARCH_VERSION when searched: older misses are searched again
 )
 
+/**
+ * A followed competition, e.g. the Premier League: all its games show, their alerts off until turned
+ * on. [slug] is ESPN's ("eng.1"); [fotmobId] is FotMob's league, found by name, for channels and lineups.
+ */
+@Serializable
+data class League(
+    val slug: String,
+    val name: String,
+    val fotmobId: String = "",
+) {
+    /** Its news and highlights' key (a team's is its ESPN id). */
+    val key get() = "league:$slug"
+}
+
 @Serializable
 data class AppState(
     val teams: List<Team> = DEFAULT_TEAMS,
+    val leagues: List<League> = emptyList(),
     val matches: Map<String, Match> = emptyMap(),
     val alerts: Map<String, AlertState> = emptyMap(),
     val scoreboardChecked: Set<String> = emptySet(),
     val videoSearches: Map<String, VideoSearch> = emptyMap(),  // cached, as searches use a small daily allowance   // team ids already checked for a game in progress
     val lastRefresh: Long = 0,
 )
+
+/** What's followed (teams' ids, leagues' keys): a change means a refresh. */
+fun AppState.followKeys() = teams.map { it.id } + leagues.map { it.key }
+
+/** A game of a followed league (whatever teams play in it). */
+fun AppState.follows(m: Match) = leagues.any { it.slug == m.leagueSlug }
 
 // ESPN's Bolívar color (3c96c4) is darker than the club's light blue.
 const val BOLIVAR_LIGHT_BLUE = "7cc4ec"

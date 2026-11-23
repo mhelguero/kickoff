@@ -326,6 +326,40 @@ object FotMob {
             }.getOrNull()
         }
 
+    /**
+     * FotMob's league for an ESPN one, by name; with several of that name (England's and Egypt's
+     * Premier League), the one of ESPN's country ("eng.1" -> ENG). Null if none.
+     */
+    fun findLeague(name: String, slug: String): String? {
+        val country = slug.substringBefore('.').uppercase()
+        val leagues = get("$BASE/search/suggest?term=${URLEncoder.encode(name, "UTF-8")}&lang=en").arr
+            .flatMap { it.obj["suggestions"].arr }.map { it.obj }.filter { it.str("type") == "league" }
+        return (leagues.firstOrNull { it.str("ccode") == country } ?: leagues.firstOrNull())?.str("id")
+    }
+
+    /**
+     * The FotMob game in a league's [fixtures] that is ESPN's [m]: same kickoff (within 15 minutes;
+     * many of a league's games start together) and the same home or away team, its name the same or
+     * one inside the other ("Brighton" in "Brighton & Hove Albion").
+     */
+    fun sameGame(fixtures: List<Fixture>, m: Match): Fixture? = fixtures.firstOrNull { f ->
+        Math.abs(f.startMillis - m.dateMillis) <= 15 * 60_000L &&
+            (BoliviaTv.sameTeam(f.home, m.home) || BoliviaTv.sameTeam(f.away, m.away))
+    }
+
+    /** A league's games this season (the whole season, played and to come). */
+    fun leagueFixtures(leagueId: String): List<Fixture> =
+        get("$BASE/leagues?id=$leagueId").obj["fixtures"].obj["allMatches"].arr.mapNotNull { f ->
+            val id = f.obj.str("id") ?: return@mapNotNull null
+            val status = f.obj["status"].obj
+            val time = status.str("utcTime") ?: return@mapNotNull null
+            runCatching {
+                Fixture(id, OffsetDateTime.parse(time).toInstant().toEpochMilli(),
+                    home = f.obj["home"].obj.str("name").orEmpty(), away = f.obj["away"].obj.str("name").orEmpty(),
+                    score = status.str("scoreStr").orEmpty(), finished = status.str("finished") == "true")
+            }.getOrNull()
+        }
+
     /** A game's official highlights video (usually YouTube) and its thumbnail image. */
     data class Highlight(val url: String, val image: String?)
 

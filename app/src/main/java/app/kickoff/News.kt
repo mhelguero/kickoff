@@ -72,8 +72,21 @@ object News {
             // Highlights go back 2 weeks.
             val highlightsSince = System.currentTimeMillis() - 2 * WEEK
             val missing = java.util.Collections.synchronizedList(mutableListOf<Missing>())
+            val leagues = Store.state.value.leagues
             val all = coroutineScope {
-                teams.map { t ->
+                // Followed leagues: their news, and highlights of their games (FotMob's only: YouTube
+                // searches use a small daily allowance, too small for a whole league's games).
+                val leagueItems = leagues.map { l ->
+                    async(Dispatchers.IO) {
+                        val fotmobId = l.fotmobId.ifBlank { runCatching { FotMob.findLeague(l.name, l.slug) }.getOrNull().orEmpty() }
+                        listOf(
+                            async { runCatching { leagueHighlights(l, fotmobId, highlightsSince) }.onFailure { Log.w("News", "highlights ${l.name}", it) }.getOrDefault(emptyList()) },
+                            async { runCatching { fotmobNews(fotmobId, "league", l.key, since) }.onFailure { Log.w("News", "FotMob ${l.name}", it) }.getOrDefault(emptyList()) },
+                            async { runCatching { espnNews("https://site.api.espn.com/apis/site/v2/sports/soccer/${l.slug}/news?limit=50", l.key, since) }.onFailure { Log.w("News", "ESPN ${l.name}", it) }.getOrDefault(emptyList()) },
+                        ).awaitAll().flatten().filter { it.image != null && "Highlights: " in it.title || NewsFilter.keepLeague(it.title, it.isVideo) }
+                    }
+                }
+                (leagueItems + teams.map { t ->
                     async(Dispatchers.IO) {
                         val people = NewsFilter.peopleWords(squad(t))
                         val items = listOf(
@@ -88,7 +101,7 @@ object News {
                         }.getOrDefault(emptyList()) +
                             items.filter { NewsFilter.keep(it.title, t.name, people, it.isVideo) }
                     }
-                }.awaitAll().flatten()
+                }).awaitAll().flatten()
             }
             // The same story can come from both sources, or be about two followed teams.
             // A video counts once however it's titled.
@@ -250,11 +263,14 @@ object News {
     }
 
     /** FotMob's team news, 20 a page, newest first, back to [since]. */
-    private fun fotmob(team: Team, since: Long): List<NewsItem> {
-        if (team.fotmobId.isBlank()) return emptyList()
+    private fun fotmob(team: Team, since: Long): List<NewsItem> = fotmobNews(team.fotmobId, "team", team.id, since)
+
+    /** FotMob's news for a team or league ([type]), back to [since], filed under [key]. */
+    private fun fotmobNews(fotmobId: String, type: String, key: String, since: Long): List<NewsItem> {
+        if (fotmobId.isBlank()) return emptyList()
         val out = mutableListOf<NewsItem>()
         for (page in 0 until 15) {
-            val data = get("https://www.fotmob.com/api/data/tlnews?id=${team.fotmobId}&type=team&language=en&startIndex=${page * 20}")
+            val data = get("https://www.fotmob.com/api/data/tlnews?id=$fotmobId&type=$type&language=en&startIndex=${page * 20}")
                 .obj["data"].arr.map { it.obj }
             if (data.isEmpty()) break
             var oldest = Long.MAX_VALUE
@@ -266,7 +282,7 @@ object News {
                 val url = if (path.startsWith("/")) "https://www.fotmob.com$path" else path
                 // Videos (highlight reels) get their thumbnail like the highlights cards.
                 val image = if (youtubeId(url) != null) a.str("imageUrl") else null
-                if (time >= since) out += NewsItem(title.trim(), a.str("sourceStr").orEmpty(), time, url, team.id, image = image)
+                if (time >= since) out += NewsItem(title.trim(), a.str("sourceStr").orEmpty(), time, url, key, image = image)
             }
             if (oldest < since) break
         }
@@ -275,7 +291,29 @@ object News {
 
     /** ESPN's team headlines (videos left out), back to [since]. */
     private fun espn(team: Team, since: Long): List<NewsItem> =
-        get("https://site.api.espn.com/apis/site/v2/sports/soccer/all/news?team=${team.id}&limit=50").obj["articles"].arr
+        espnNews("https://site.api.espn.com/apis/site/v2/sports/soccer/all/news?team=${team.id}&limit=50", team.id, since)
+
+    /**
+     * A followed league's finished games since [since] that have FotMob highlights, as highlight
+     * cards (the competition named where an article's writer would be).
+     */
+    private fun leagueHighlights(l: League, fotmobId: String, since: Long): List<NewsItem> {
+        if (fotmobId.isBlank()) return emptyList()
+        val now = System.currentTimeMillis()
+        return FotMob.leagueFixtures(fotmobId).filter { it.finished && it.startMillis in since..now }.mapNotNull { g ->
+            val h = synchronized(highlightUrls) { highlightUrls[g.id] }
+                ?: runCatching { FotMob.highlights(g.id) }.getOrNull()?.also { synchronized(highlightUrls) { highlightUrls[g.id] = it } }
+                ?: return@mapNotNull null
+            val site = android.net.Uri.parse(h.url).host.orEmpty().removePrefix("www.")
+            val source = if ("youtube" in site || "youtu.be" in site) "YouTube" else site
+            NewsItem("Highlights: ${g.home} ${g.score.replace(" - ", "–")} ${g.away}", source, g.startMillis + 2 * HOUR, h.url, l.key,
+                writer = l.name, image = h.image ?: youtubeId(h.url)?.let { "https://i.ytimg.com/vi/$it/hqdefault.jpg" })
+        }
+    }
+
+    /** ESPN headlines from a team's or league's news [url] (videos left out), back to [since], filed under [key]. */
+    private fun espnNews(url: String, key: String, since: Long): List<NewsItem> =
+        get(url).obj["articles"].arr
             .map { it.obj }
             .filter { it.str("type") != "Media" }
             .mapNotNull { a ->
@@ -283,7 +321,7 @@ object News {
                 val time = a.str("published")?.let { runCatching { OffsetDateTime.parse(it).toInstant().toEpochMilli() }.getOrNull() }
                     ?: return@mapNotNull null
                 val url = a["links"].obj["web"].obj.str("href") ?: return@mapNotNull null
-                if (time < since) null else NewsItem(title.trim(), "ESPN", time, url, team.id, a.str("byline").orEmpty().trim())
+                if (time < since) null else NewsItem(title.trim(), "ESPN", time, url, key, a.str("byline").orEmpty().trim())
             }
 
     private fun get(url: String): JsonElement {
