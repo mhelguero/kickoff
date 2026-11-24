@@ -315,7 +315,11 @@ private fun Root(openMatch: String?, onOpenMatch: (String?) -> Unit, needsSetup:
     } else if (league != null) {
         BackHandler { openLeague = null }
         saved.SaveableStateProvider("league-${league.slug}") {
-            LeagueScreen(league, state, onBack = { openLeague = null }, onOpenMatch = onOpenMatch)
+            LeagueScreen(league, state, onBack = { openLeague = null }, onOpenGame = { g ->
+                // A game the app doesn't store (further ahead than two weeks): its page from this copy.
+                if (g.id !in state.matches) extra[g.id] = g
+                onOpenMatch(g.id)
+            })
         }
     } else {
         saved.SaveableStateProvider("home") {
@@ -688,19 +692,48 @@ private fun HomeScreen(
 }
 
 /**
- * A followed league's (or cup's) page: like the home screen's Games, but every game of the league,
- * each as a full card (Live, Ended folded away until tapped, Upcoming by day). Back returns home.
+ * A followed league's (or cup's) page: every game of the league (the app stores only the next two
+ * weeks of a league's games, so this page loads the league's schedule itself, months ahead, with
+ * "Show more" for later ones), as a scoreboard easy to scan: one row per game, the two teams on
+ * their own lines with crests, followed teams in bold with their color. A search box keeps only one
+ * team's games. Back returns home.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun LeagueScreen(league: League, state: AppState, onBack: () -> Unit, onOpenMatch: (String) -> Unit) {
+private fun LeagueScreen(league: League, state: AppState, onBack: () -> Unit, onOpenGame: (Match) -> Unit) {
     var endedOpen by rememberSaveable { mutableStateOf(false) }
+    var query by rememberSaveable { mutableStateOf("") }
+    var monthsAhead by rememberSaveable { mutableIntStateOf(3) }
+    val now = System.currentTimeMillis()
     val today = LocalDate.now()
-    val games = state.matches.values.filter { it.leagueSlug == league.slug }.sortedBy { it.dateMillis }
+    // The league's own schedule, month by month (ESPN's league scoreboard takes a month at a time).
+    val loaded = remember(league.slug) { mutableStateMapOf<String, List<Match>>() }
+    var loading by remember { mutableStateOf(false) }
+    LaunchedEffect(league.slug, monthsAhead) {
+        val fmt = DateTimeFormatter.ofPattern("yyyyMM")
+        val first = java.time.YearMonth.from(today.minusDays(14))
+        val months = generateSequence(first) { it.plusMonths(1) }.takeWhile { !it.isAfter(java.time.YearMonth.from(today).plusMonths(monthsAhead.toLong())) }
+            .map { fmt.format(it) }.filter { it !in loaded }.toList()
+        loading = true
+        for (month in months) {
+            withContext(Dispatchers.IO) { runCatching { Espn.leagueGames(league.slug, month) }.getOrNull() }?.let { loaded[month] = it }
+        }
+        loading = false
+    }
+    // The app's own copy of a game wins (it has channels, live scores and alerts).
+    val stored = state.matches.values.filter { it.leagueSlug == league.slug }
+    val games = (loaded.values.flatten().filter { it.id !in state.matches } + stored)
+        .distinctBy { it.id }
+        .filter { m -> query.isBlank() || listOf(m.home, m.away).any { it.contains(query.trim(), ignoreCase = true) } }
+        .sortedBy { it.dateMillis }
     val live = games.filter { it.state == "in" }
-    val upcoming = games.filter { it.state == "pre" && !it.zoned().toLocalDate().isBefore(today) }
-    val ended = games.filter { it.state == "post" && it.completed }.reversed()
-    fun muted(m: Match) = if (m.state == "post") null else state.alerts[m.id]?.muted == true
+    // Only as far as the league's schedule is loaded: followed teams' games go further, and alone
+    // they'd look like the league's only games.
+    val loadedUntil = java.time.YearMonth.from(today).plusMonths(monthsAhead.toLong()).atEndOfMonth()
+    val upcoming = games.filter { val d = it.zoned().toLocalDate(); it.state == "pre" && !d.isBefore(today) && !d.isAfter(loadedUntil) }
+    val ended = games.filter { it.state == "post" && it.completed && it.dateMillis > now - 14 * 24 * 3600_000L }.reversed()
+    // Bells only for the games the app tracks (the next two weeks'); finished games have none.
+    fun muted(m: Match) = if (m.state == "post" || m.id !in state.matches) null else state.alerts[m.id]?.muted == true
     Scaffold(
         topBar = {
             TopAppBar(
@@ -712,11 +745,17 @@ private fun LeagueScreen(league: League, state: AppState, onBack: () -> Unit, on
         LazyColumn(
             Modifier.fillMaxSize().padding(pad).wrapContentWidth().widthIn(max = MAX_CONTENT_WIDTH).fillMaxWidth(),
             contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            item(key = "find") {
+                OutlinedTextField(query, { query = it }, Modifier.fillMaxWidth(), singleLine = true,
+                    placeholder = { Text("Find a team") },
+                    leadingIcon = { Icon(Icons.Default.Search, null) },
+                    trailingIcon = { if (query.isNotEmpty()) IconButton(onClick = { query = "" }) { Icon(Icons.Default.Close, "Clear") } })
+            }
             if (live.isNotEmpty()) {
                 item(key = "live-header") { SectionHeader("Live") }
-                items(live, key = { "live-${it.id}" }) { m -> GameCard(m, state.teams, muted(m), crests = true) { onOpenMatch(m.id) } }
+                items(live, key = { "live-${it.id}" }) { m -> ScoreRow(m, state.teams, muted(m)) { onOpenGame(m) } }
             }
             if (ended.isNotEmpty()) {
                 item(key = "ended-header") {
@@ -732,14 +771,73 @@ private fun LeagueScreen(league: League, state: AppState, onBack: () -> Unit, on
                 }
                 if (endedOpen) ended.groupBy { it.zoned().toLocalDate() }.forEach { (day, dayGames) ->
                     item(key = "ended-day-$day") { DayDivider(dividerFmt.format(day)) }
-                    items(dayGames, key = { "ended-${it.id}" }) { m -> GameCard(m, state.teams, crests = true) { onOpenMatch(m.id) } }
+                    items(dayGames, key = { "ended-${it.id}" }) { m -> ScoreRow(m, state.teams, null) { onOpenGame(m) } }
                 }
             }
             item(key = "upcoming-header") { Column { SectionHeader("Upcoming"); SectionLine() } }
-            if (upcoming.isEmpty()) item { Hint("No games in the next two weeks.") }
+            if (upcoming.isEmpty()) item {
+                Hint(when { loading -> "Loading games…"; query.isNotBlank() -> "No upcoming games for \"${query.trim()}\"."; else -> "No upcoming games found." })
+            }
             upcoming.groupBy { it.zoned().toLocalDate() }.forEach { (day, dayGames) ->
                 item(key = "day-$day") { DayDivider(dividerFmt.format(day)) }
-                items(dayGames, key = { "up-${it.id}" }) { m -> GameCard(m, state.teams, muted(m), crests = true) { onOpenMatch(m.id) } }
+                items(dayGames, key = { "up-${it.id}" }) { m -> ScoreRow(m, state.teams, muted(m)) { onOpenGame(m) } }
+            }
+            item(key = "more") {
+                if (loading) Hint("Loading games…")
+                else TextButton(onClick = { monthsAhead += 2 }, modifier = Modifier.fillMaxWidth()) { Text("Show more games") }
+            }
+        }
+    }
+}
+
+/**
+ * One game as a scoreboard line: kickoff time (or the minute, or FT) on the left, then the two teams
+ * on their own lines, crest first, with their scores on the right; a followed team in bold with a
+ * bar in its color. The bell, when the app tracks the game, on the right. Tap for the game.
+ */
+@Composable
+private fun ScoreRow(m: Match, teams: List<Team>, muted: Boolean?, onClick: () -> Unit) = DefaultFontSize {
+    val context = LocalContext.current
+    Card(Modifier.fillMaxWidth().clickable(onClick = onClick), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
+        Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.width(60.dp)) {
+                when (m.state) {
+                    "in" -> LiveBadge(m.statusLabel.removePrefix("LIVE ").trim())
+                    "post" -> Text(m.statusLabel.ifEmpty { "FT" }, style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    else -> Text(m.kickoffTime(), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold,
+                        maxLines = 1, softWrap = false)
+                }
+            }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                listOf(Triple(m.home, m.homeId, m.homeScore), Triple(m.away, m.awayId, m.awayScore)).forEach { (name, id, score) ->
+                    val team = teams.firstOrNull { it.id == id }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        // A followed team: a bar in its color.
+                        // (outlined, so a white team color still shows on a light card)
+                        val bar = colorOf(team)
+                        Box(Modifier.width(4.dp).height(20.dp).then(
+                            if (bar != null) Modifier.background(bar, RoundedCornerShape(2.dp))
+                                .border(0.5.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(2.dp)) else Modifier))
+                        Spacer(Modifier.width(6.dp))
+                        SmallCrest(id, size = 20.dp)
+                        Spacer(Modifier.width(8.dp))
+                        Text(name, Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = if (team != null) FontWeight.Bold else null, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        if (m.state != "pre" && score != null) Text(score, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+            muted?.let { off ->
+                IconButton(onClick = {
+                    Store.setMuted(m.id, !off)
+                    Tracker.scheduleNextWatch(context)
+                    Toast.makeText(context, if (off) "Alerts on for ${m.title}" else "Alerts off for ${m.title}", Toast.LENGTH_SHORT).show()
+                }, modifier = Modifier.padding(start = 4.dp).size(28.dp)) {
+                    if (off) Icon(painterResource(R.drawable.ic_bell_off), "Turn alerts on",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+                    else Icon(Icons.Default.Notifications, "Turn alerts off", modifier = Modifier.size(20.dp))
+                }
             }
         }
     }
