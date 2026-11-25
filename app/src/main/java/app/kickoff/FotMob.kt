@@ -89,6 +89,8 @@ object FotMob {
         val cameOn: Int? = null,  // for subs: the minute they came on, if they did
         val age: String = "",
         val country: String = "",
+        val wentOff: Int? = null,   // for starters: the minute they were subbed off, if they were
+        val replaced: String = "",  // for subs who came on: who they replaced
     ) {
         /** FotMob's photo of the player. */
         val photo get() = "https://images.fotmob.com/image_resources/playerimages/$id.png"
@@ -193,7 +195,15 @@ object FotMob {
         val colors = general["teamColors"].obj["lightMode"].obj
         val homeId = general["homeTeam"].obj.str("id").orEmpty()
         val awayId = general["awayTeam"].obj.str("id").orEmpty()
-        return Details(lineups(content["lineup"] as? JsonObject), goals, star, tableLeague, teamIds.ifEmpty { listOf(homeId, awayId) },
+        // Who came on for whom: each substitution event names the player coming on, then the one going off.
+        val replacedFor = facts["events"].obj["events"].arr.map { it.obj }.filter { it.str("type") == "Substitution" }
+            .mapNotNull { e ->
+                val swap = e["swap"].arr.map { it.obj }
+                val on = swap.getOrNull(0)?.str("id") ?: return@mapNotNull null
+                val off = swap.getOrNull(1)?.str("name") ?: return@mapNotNull null
+                on to off
+            }.toMap()
+        return Details(lineups(content["lineup"] as? JsonObject, replacedFor), goals, star, tableLeague, teamIds.ifEmpty { listOf(homeId, awayId) },
             general.str("parentLeagueId") ?: general.str("leagueId"),
             mapOf(homeId to colors.str("home").orEmpty(), awayId to colors.str("away").orEmpty()).filterValues { it.isNotBlank() },
             playerStats(content["playerStats"] as? JsonObject))
@@ -282,19 +292,22 @@ object FotMob {
         else -> stage.replaceFirstChar { it.uppercase() }
     }
 
-    private fun lineups(lu: JsonObject?): Lineups? {
+    private fun lineups(lu: JsonObject?, replacedFor: Map<String, String> = emptyMap()): Lineups? {
         if (lu == null) return null
         fun players(e: JsonElement?) = e.arr.mapNotNull { p ->
             val perf = p.obj["performance"].obj
             val rating = perf.str("rating")?.toDoubleOrNull()
-            val cameOn = perf["substitutionEvents"].arr.map { it.obj }.firstOrNull { it.str("type") == "subIn" }?.str("time")?.toIntOrNull()
+            val subs = perf["substitutionEvents"].arr.map { it.obj }
+            val cameOn = subs.firstOrNull { it.str("type") == "subIn" }?.str("time")?.toIntOrNull()
+            val wentOff = subs.firstOrNull { it.str("type") == "subOut" }?.str("time")?.toIntOrNull()
             // FotMob's vertical layout is mirrored for a pitch with the goalkeeper at the bottom (its
             // right backs are near x = 0), so x is flipped: left-sided players end up on the left.
             val at = p.obj["verticalLayout"].obj
             p.obj.str("name")?.let {
                 Player(it, p.obj.str("shirtNumber").orEmpty(), rating, at.str("x")?.toFloatOrNull()?.let { 1f - it }, at.str("y")?.toFloatOrNull(),
                     p.obj.str("id").orEmpty(), p.obj.str("lastName").orEmpty(), cameOn,
-                    p.obj.str("age").orEmpty(), p.obj.str("countryName").orEmpty())
+                    p.obj.str("age").orEmpty(), p.obj.str("countryName").orEmpty(),
+                    wentOff, replacedFor[p.obj.str("id").orEmpty()].orEmpty())
             }
         }
         fun side(key: String): Side {

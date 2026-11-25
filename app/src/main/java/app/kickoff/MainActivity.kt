@@ -1499,12 +1499,17 @@ private fun PlayerSheet(
             }
             val goals = tally.goals[p.id] ?: 0
             val assists = tally.assists[p.id] ?: 0
-            if (goals + assists > 0 || p.cameOn != null) {
+            if (goals + assists > 0 || p.cameOn != null || p.wentOff != null) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                     GoalIcons(p, tally, LocalContentColor.current)
                     p.cameOn?.let {
                         if (goals + assists > 0) Spacer(Modifier.width(8.dp))
-                        Text("Came on $it'", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("Came on $it'" + p.replaced.ifBlank { null }?.let { " for $it" }.orEmpty(),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    p.wentOff?.let {
+                        if (goals + assists > 0 || p.cameOn != null) Spacer(Modifier.width(8.dp))
+                        Text("Subbed off $it'", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
@@ -1553,6 +1558,13 @@ private fun PlayerPhoto(p: FotMob.Player) {
             val image = photo
             if (image != null) Image(image, contentDescription = p.name, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
             else Text(p.number, color = Color(0xFF1B5E20), fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge)
+        }
+        // Subbed off: a red tag with the minute on the photo's top corner.
+        p.wentOff?.let { min ->
+            Text("▼$min'", color = Color.White, fontWeight = FontWeight.Bold,
+                style = TextStyle(fontSize = 8.sp, lineHeight = 9.sp, platformStyle = PlatformTextStyle(includeFontPadding = false)),
+                modifier = Modifier.align(Alignment.TopStart).offset(x = (-8).dp, y = (-2).dp)
+                    .background(Color(0xFFD32F2F), RoundedCornerShape(4.dp)).padding(horizontal = 3.dp, vertical = 1.dp))
         }
         if (photo != null && p.number.isNotBlank()) {
             Box(Modifier.size(17.dp).align(Alignment.BottomEnd).background(Color(0xFF1B5E20), CircleShape),
@@ -1689,7 +1701,7 @@ private fun LineupCard(side: FotMob.Side, best: Double?, tally: Tally, onPlayer:
                     Text(p.number, modifier = Modifier.width(32.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
                     // The name wraps before the icons shrink.
                     Row(Modifier.weight(1f).padding(end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text(p.name, modifier = Modifier.weight(1f, fill = false))
+                        Text(p.name + p.wentOff?.let { "  ▼$it'" }.orEmpty(), modifier = Modifier.weight(1f, fill = false))
                         Spacer(Modifier.width(4.dp))
                         GoalIcons(p, tally, LocalContentColor.current)
                     }
@@ -1708,7 +1720,9 @@ private fun LineupCard(side: FotMob.Side, best: Double?, tally: Tally, onPlayer:
                 Row(Modifier.clickable(enabled = p.id.isNotBlank()) { onPlayer(p) }, verticalAlignment = Alignment.CenterVertically) {
                     Text(p.number, modifier = Modifier.width(32.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Row(Modifier.weight(1f).padding(end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text("${p.name} (sub${p.cameOn?.let { " $it'" }.orEmpty()})", color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        // "(sub 67' for Bernardo Silva)": when they came on, and who for.
+                        Text("${p.name} (sub${p.cameOn?.let { " $it'" }.orEmpty()}${p.replaced.ifBlank { null }?.let { " for $it" }.orEmpty()})",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.weight(1f, fill = false))
                         Spacer(Modifier.width(4.dp))
                         GoalIcons(p, tally, MaterialTheme.colorScheme.onSurfaceVariant)
