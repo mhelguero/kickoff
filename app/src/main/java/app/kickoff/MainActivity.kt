@@ -1025,7 +1025,7 @@ private fun DayDivider(label: String) {
 
 /** A headline, in its team's color; tapping opens the article. */
 @Composable
-private fun NewsCard(n: NewsItem, teams: List<Team>) {
+private fun NewsCard(n: NewsItem, teams: List<Team>) = DefaultFontSize {
     val context = LocalContext.current
     val background = colorOf(teams.firstOrNull { it.id == n.teamId })
     val content = contentOn(background)
@@ -1035,11 +1035,14 @@ private fun NewsCard(n: NewsItem, teams: List<Team>) {
         else CardDefaults.cardColors(),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
-        // Highlight videos show their thumbnail across the top.
-        n.image?.let { Thumbnail(it) }
-        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+        // As compact as a game card: a highlight's thumbnail, or the team's crest, on the left.
+        Row(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (n.image != null) {
+                Thumbnail(n.image, Modifier.width(112.dp).clip(RoundedCornerShape(8.dp)))
+                Spacer(Modifier.width(12.dp))
+            }
             // Which team the story is about.
-            TeamCrest(n.teamId, background)
+            else TeamCrest(n.teamId, background, size = 32.dp, gap = 10.dp)
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     // The app a tap opens (e.g. the browser, or ESPN or FotMob for their own links).
@@ -1059,13 +1062,15 @@ private fun NewsCard(n: NewsItem, teams: List<Team>) {
                         ?: timeFmt.format(Instant.ofEpochMilli(n.timeMillis).atZone(ZoneId.systemDefault()))
                     Text(corner, style = MaterialTheme.typography.labelLarge, color = content.copy(alpha = 0.8f))
                 }
-                Spacer(Modifier.height(4.dp))
-                Text(n.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(2.dp))
+                Text(n.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold,
+                    maxLines = 2, overflow = TextOverflow.Ellipsis)
                 // Articles: writer and outlet, e.g. "Sam Marsden • ESPN". Highlights have no writer line.
                 if (!n.isHighlight) {
-                    Spacer(Modifier.height(4.dp))
+                    Spacer(Modifier.height(2.dp))
                     Text(listOf(n.writer, n.source).filter { it.isNotBlank() }.distinct().joinToString(Streaming.DOT),
-                        style = MaterialTheme.typography.labelLarge, color = content.copy(alpha = 0.8f))
+                        style = MaterialTheme.typography.labelMedium, color = content.copy(alpha = 0.8f),
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
         }
@@ -1084,11 +1089,11 @@ private fun videoLength(secs: Int): String {
 }
 
 /**
- * A video thumbnail, full width at 16:9; nothing until (or unless) it loads. YouTube's largest
+ * A video thumbnail at 16:9, as wide as [modifier] makes it; nothing until (or unless) it loads. YouTube's largest
  * size doesn't exist for every video, so its standard size is tried next.
  */
 @Composable
-private fun Thumbnail(url: String) {
+private fun Thumbnail(url: String, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val image by produceState<ImageBitmap?>(null, url) {
         value = withContext(Dispatchers.IO) {
@@ -1096,9 +1101,9 @@ private fun Thumbnail(url: String) {
                 ?.let { Logos.load(context, it.replace("maxresdefault", "hqdefault")) }
         }
     }
-    image?.let {
-        Image(it, contentDescription = null, contentScale = ContentScale.Crop,
-            modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f))
+    // Its space is kept while it loads, so the card doesn't change size.
+    Box(modifier.aspectRatio(16f / 9f).background(MaterialTheme.colorScheme.surfaceVariant)) {
+        image?.let { Image(it, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()) }
     }
 }
 

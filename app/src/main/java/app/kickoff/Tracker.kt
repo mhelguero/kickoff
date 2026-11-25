@@ -213,7 +213,9 @@ object Tracker {
         val found = mutableMapOf<String, Pair<String, List<String>>>()  // match id to (FotMob id, channels here)
         for (m in s0.matches.values) {
             if (m.state == "post" || m.dateMillis > now + 14 * 24 * HOUR) continue
-            if (my in m.tv && m.dateMillis > now + 2 * 24 * HOUR) continue
+            // Channels already known: checked again only in the last two days (late additions). None
+            // known yet: checked every refresh, since they're often announced only days before.
+            if (!m.tv[my].isNullOrEmpty() && m.dateMillis > now + 2 * 24 * HOUR) continue
             // Same team, kickoff within 3 hours: a team never plays twice that close together.
             val fid = m.fotmobId.ifBlank { null } ?: s0.teams.filter { it.id in m.teamIds }
                 .flatMap { fixtures[it.id].orEmpty() }
