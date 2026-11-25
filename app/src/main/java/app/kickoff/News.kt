@@ -74,17 +74,13 @@ object News {
             val missing = java.util.Collections.synchronizedList(mutableListOf<Missing>())
             val leagues = Store.state.value.leagues
             val all = coroutineScope {
-                // Followed leagues: their news, and highlights of their games (FotMob's only: YouTube
-                // searches use a small daily allowance, too small for a whole league's games).
+                // Followed leagues: highlights of their games only (no news: that's for followed teams).
                 val leagueItems = leagues.map { l ->
                     async(Dispatchers.IO) {
                         val games = Store.state.value.matches.values.filter { it.leagueSlug == l.slug }
                         val fotmobId = l.fotmobId.ifBlank { runCatching { FotMob.findLeague(l.name, l.slug, games) }.getOrNull().orEmpty() }
-                        listOf(
-                            async { runCatching { leagueHighlights(l, fotmobId, highlightsSince) }.onFailure { Log.w("News", "highlights ${l.name}", it) }.getOrDefault(emptyList()) },
-                            async { runCatching { fotmobNews(fotmobId, "league", l.key, since) }.onFailure { Log.w("News", "FotMob ${l.name}", it) }.getOrDefault(emptyList()) },
-                            async { runCatching { espnNews("https://site.api.espn.com/apis/site/v2/sports/soccer/${l.slug}/news?limit=50", l.key, since) }.onFailure { Log.w("News", "ESPN ${l.name}", it) }.getOrDefault(emptyList()) },
-                        ).awaitAll().flatten().filter { it.image != null && "Highlights: " in it.title || NewsFilter.keepLeague(it.title, it.isVideo) }
+                        runCatching { leagueHighlights(context, l, fotmobId, highlightsSince) }
+                            .onFailure { Log.w("News", "highlights ${l.name}", it) }.getOrDefault(emptyList())
                     }
                 }
                 (leagueItems + teams.map { t ->
@@ -295,16 +291,39 @@ object News {
         espnNews("https://site.api.espn.com/apis/site/v2/sports/soccer/all/news?team=${team.id}&limit=50", team.id, since)
 
     /**
-     * A followed league's finished games since [since] that have FotMob highlights, as highlight
-     * cards (the competition named where an article's writer would be).
+     * A followed league's finished games since [since] that have highlights, as highlight cards (the
+     * competition named where an article's writer would be): FotMob's video when it has one, else
+     * YouTube's, found for all the league's games at once with one search (FotMob has none for some
+     * competitions, e.g. the Champions League). The search runs at most every 3 hours per league
+     * while games lack a video, and what it finds is saved.
      */
-    private fun leagueHighlights(l: League, fotmobId: String, since: Long): List<NewsItem> {
+    private fun leagueHighlights(context: android.content.Context, l: League, fotmobId: String, since: Long): List<NewsItem> {
         if (fotmobId.isBlank()) return emptyList()
         val now = System.currentTimeMillis()
-        return FotMob.leagueFixtures(fotmobId).filter { it.finished && it.startMillis in since..now }.mapNotNull { g ->
-            val h = synchronized(highlightUrls) { highlightUrls[g.id] }
-                ?: runCatching { FotMob.highlights(g.id) }.getOrNull()?.also { synchronized(highlightUrls) { highlightUrls[g.id] = it } }
-                ?: return@mapNotNull null
+        val games = FotMob.leagueFixtures(fotmobId).filter { it.finished && it.startMillis in since..now }
+        fun saved(id: String) = Store.state.value.videoSearches["fm-$id"]?.url?.let { FotMob.Highlight(it, Store.state.value.videoSearches["fm-$id"]?.image) }
+        val fromFotmob = games.associate { g ->
+            g.id to (synchronized(highlightUrls) { highlightUrls[g.id] } ?: saved(g.id)
+                ?: runCatching { FotMob.highlights(g.id) }.getOrNull()?.also { synchronized(highlightUrls) { highlightUrls[g.id] = it } })
+        }
+        // Games still without a video, an hour after they ended: one YouTube search for them all.
+        val lacking = games.filter { fromFotmob[it.id] == null && now > it.startMillis + 2 * HOUR }
+        val lastSearch = Store.state.value.videoSearches[l.key]?.checkedAt ?: 0L
+        val searched = if (lacking.isNotEmpty() && now - lastSearch > 3 * HOUR) {
+            val found = runCatching {
+                YouTube.leagueHighlights(context, l.name, lacking.associate { it.id to Triple(it.home, it.away, it.startMillis) })
+            }.onFailure { Log.w("News", "YouTube ${l.name}", it) }
+            Store.update { s ->
+                val kept = s.videoSearches.filterValues { now - it.checkedAt < 28 * 24 * HOUR }
+                // The league's last search (a failed one isn't counted, so it's tried again next time).
+                val league = if (found.isSuccess) mapOf(l.key to VideoSearch(null, null, now, SEARCH_VERSION)) else emptyMap()
+                s.copy(videoSearches = kept + league +
+                    found.getOrDefault(emptyMap()).map { (id, v) -> "fm-$id" to VideoSearch(v.url, v.image, now, SEARCH_VERSION) })
+            }
+            found.getOrDefault(emptyMap()).mapValues { FotMob.Highlight(it.value.url, it.value.image) }
+        } else emptyMap()
+        return games.mapNotNull { g ->
+            val h = fromFotmob[g.id] ?: searched[g.id] ?: return@mapNotNull null
             val site = android.net.Uri.parse(h.url).host.orEmpty().removePrefix("www.")
             val source = if ("youtube" in site || "youtu.be" in site) "YouTube" else site
             NewsItem("Highlights: ${g.home} ${g.score.replace(" - ", "–")} ${g.away}", source, g.startMillis + 2 * HOUR, h.url, l.key,

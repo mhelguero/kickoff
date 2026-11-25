@@ -56,6 +56,41 @@ object YouTube {
         }
     }
 
+    /**
+     * Highlights of several games of one competition with a single search ("UEFA Champions League
+     * highlights" since the earliest kickoff, most relevant first: the official uploads rank above
+     * the many fan clips that sorting by date would bring): a search per game would use up the
+     * daily allowance on a whole league. Each game (key to home, away, kickoff) gets the first video
+     * uploaded after its kickoff whose title names both teams and is a highlights video.
+     */
+    fun leagueHighlights(context: Context, competition: String, games: Map<String, Triple<String, String, Long>>): Map<String, Video> {
+        if (!enabled || games.isEmpty()) return emptyMap()
+        val q = Uri.encode("$competition highlights")
+        val after = Instant.ofEpochMilli(games.values.minOf { it.third }).toString()
+        val items = (get(context, "https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=50" +
+            "&order=relevance&q=$q&publishedAfter=$after&key=${BuildConfig.YOUTUBE_API_KEY}") as? JsonObject)?.get("items").arr.map { it.obj }
+        val found = mutableMapOf<String, Video>()
+        for ((key, game) in games) {
+            val (home, away, kickoff) = game
+            val homeWords = words(home)
+            val awayWords = words(away)
+            items.firstNotNullOfOrNull { item ->
+                val id = item["id"].obj.str("videoId") ?: return@firstNotNullOfOrNull null
+                val snippet = item["snippet"].obj
+                val published = snippet.str("publishedAt")?.let { runCatching { Instant.parse(it).toEpochMilli() }.getOrNull() } ?: 0L
+                val title = norm(snippet.str("title").orEmpty())
+                val titleWords = Regex("[a-z0-9]+").findAll(title).map { it.value }.toSet()
+                val ok = published > kickoff && (HIGHLIGHT.containsMatchIn(title) || SCORE.containsMatchIn(title)) &&
+                    !FAKE.containsMatchIn(title) && homeWords.any { it in titleWords } && awayWords.any { it in titleWords }
+                if (!ok) return@firstNotNullOfOrNull null
+                val thumbs = snippet["thumbnails"].obj
+                val image = listOf("maxres", "high", "medium", "default").firstNotNullOfOrNull { thumbs[it].obj.str("url") }
+                Video("https://www.youtube.com/watch?v=$id", image)
+            }?.let { found[key] = it }
+        }
+        return found
+    }
+
     /** The length in seconds of each of these YouTube videos (by id) that YouTube knows; 1 unit per 50 ids. */
     fun durations(context: Context, ids: List<String>): Map<String, Int> {
         if (!enabled) return emptyMap()

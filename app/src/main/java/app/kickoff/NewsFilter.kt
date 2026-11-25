@@ -70,16 +70,6 @@ object NewsFilter {
         return team in t && NEWS.containsMatchIn(t)
     }
 
-    /**
-     * A followed league's headlines: no squad to match, so everything but what's left out anyway
-     * (betting, opinion and the like); highlight reels only when they're videos.
-     */
-    fun keepLeague(title: String, isVideo: Boolean = false): Boolean {
-        val t = norm(title)
-        if (HIGHLIGHTS.containsMatchIn(t)) return isVideo
-        return !EXCLUDE.containsMatchIn(t)
-    }
-
     /** Lowercase without accents: "Mbappé" -> "mbappe". */
     private fun norm(s: String) = Normalizer.normalize(s, Normalizer.Form.NFD)
         .replace(Regex("""\p{Mn}+"""), "").lowercase().replace('’', '\'').replace('‘', '\'')
