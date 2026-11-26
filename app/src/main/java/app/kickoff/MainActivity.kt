@@ -20,6 +20,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.app.NotificationManagerCompat
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Box
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.foundation.lazy.LazyListScope
@@ -798,7 +799,7 @@ private fun LeagueScreen(league: League, state: AppState, onBack: () -> Unit, on
 @Composable
 private fun ScoreRow(m: Match, teams: List<Team>, muted: Boolean?, onClick: () -> Unit) = DefaultFontSize {
     val context = LocalContext.current
-    Card(Modifier.fillMaxWidth().clickable(onClick = onClick), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
+    Card(Modifier.fillMaxWidth().clickable(onClick = onClick), elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)) {
         Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.width(60.dp)) {
                 when (m.state) {
@@ -878,7 +879,7 @@ private fun LeagueGamesCard(
     league: String, games: List<Match>, muted: (Match) -> Boolean?, onOpenMatch: (String) -> Unit, onOpenLeague: () -> Unit,
 ) = DefaultFontSize {
     val context = LocalContext.current
-    Card(Modifier.fillMaxWidth(), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
+    Card(Modifier.fillMaxWidth(), elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)) {
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             // The league's name opens its page, with all its games.
             Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable(onClick = onOpenLeague)
@@ -939,7 +940,8 @@ private fun GameCard(m: Match, teams: List<Team>, muted: Boolean? = null, crests
         colors = if (background != null) CardDefaults.cardColors(containerColor = background, contentColor = content)
         else CardDefaults.cardColors(),
         // The outline keeps white cards visible on a light screen.
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        // No outline: a light shadow keeps white cards apart from the screen.
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
     ) {
         Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1033,12 +1035,23 @@ private fun NewsCard(n: NewsItem, teams: List<Team>) = DefaultFontSize {
         Modifier.fillMaxWidth().clickable { Streaming.openUrl(context, n.url) },
         colors = if (background != null) CardDefaults.cardColors(containerColor = background, contentColor = content)
         else CardDefaults.cardColors(),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        // No outline: a light shadow keeps white cards apart from the screen.
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
     ) {
         // As compact as a game card: a highlight's thumbnail, or the team's crest, on the left.
         Row(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             if (n.image != null) {
-                Thumbnail(n.image, Modifier.width(112.dp).clip(RoundedCornerShape(8.dp)))
+                // The video: thumbnail with a play button, and its length in the corner, as on YouTube.
+                Box(Modifier.width(128.dp).clip(RoundedCornerShape(8.dp))) {
+                    Thumbnail(n.image, Modifier.fillMaxWidth())
+                    Icon(Icons.Default.PlayArrow, null, tint = Color.White,
+                        modifier = Modifier.align(Alignment.Center).size(30.dp).background(Color.Black.copy(alpha = 0.55f), CircleShape).padding(4.dp))
+                    n.durationSecs?.let {
+                        Text(videoLength(it), color = Color.White, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold,
+                            modifier = Modifier.align(Alignment.BottomEnd).padding(4.dp)
+                                .background(Color.Black.copy(alpha = 0.75f), RoundedCornerShape(4.dp)).padding(horizontal = 4.dp, vertical = 1.dp))
+                    }
+                }
                 Spacer(Modifier.width(12.dp))
             }
             // Which team the story is about.
@@ -1053,18 +1066,19 @@ private fun NewsCard(n: NewsItem, teams: List<Team>) = DefaultFontSize {
                     // Highlights: the competition next to the icon ("Champions League").
                     if (n.isHighlight && n.writer.isNotBlank()) {
                         Spacer(Modifier.width(6.dp))
-                        Text(n.writer, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+                        Text(n.writer, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold,
+                            modifier = Modifier.weight(1f, fill = false), maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                     Spacer(Modifier.weight(1f))
-                    // Highlights: the video's length ("9:42"); articles (or a video whose length
-                    // isn't known): when it was posted.
-                    val corner = n.durationSecs?.let(::videoLength)
-                        ?: timeFmt.format(Instant.ofEpochMilli(n.timeMillis).atZone(ZoneId.systemDefault()))
-                    Text(corner, style = MaterialTheme.typography.labelLarge, color = content.copy(alpha = 0.8f))
+                    // Articles: when posted. Highlights: nothing here, so the competition fits (the day
+                    // is above the card, the video's length on its thumbnail).
+                    if (n.image == null) Text(n.durationSecs?.let(::videoLength) ?: timeFmt.format(Instant.ofEpochMilli(n.timeMillis).atZone(ZoneId.systemDefault())),
+                        style = MaterialTheme.typography.labelMedium, color = content.copy(alpha = 0.8f))
                 }
-                Spacer(Modifier.height(2.dp))
-                Text(n.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold,
-                    maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Spacer(Modifier.height(4.dp))
+                // The tab already says these are highlights: just the game ("Valencia 0–3 Real Madrid").
+                Text(n.title.removePrefix("Highlights: "), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold,
+                    maxLines = 3, overflow = TextOverflow.Ellipsis)
                 // Articles: writer and outlet, e.g. "Sam Marsden • ESPN". Highlights have no writer line.
                 if (!n.isHighlight) {
                     Spacer(Modifier.height(2.dp))

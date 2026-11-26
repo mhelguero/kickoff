@@ -151,7 +151,10 @@ object Tracker {
                 Log.w(TAG, "FotMob team ${team.fotmobId} isn't ${team.name}: searching again")
             }
             // Search: the first candidate whose games line up (FotMob's names can differ from ESPN's).
-            val candidates = runCatching { FotMob.findTeams(team.name) }.onFailure(failed("team search")).getOrNull() ?: continue
+            // A women's team (ESPN says so, or it plays in women's competitions) is a different team on
+            // FotMob ("USA (W)"), and searches for it must skip the men's team of the same name.
+            val women = "women" in team.league.lowercase() || games.any { isWomen(it.leagueSlug) }
+            val candidates = runCatching { FotMob.findTeams(team.name, women) }.onFailure(failed("team search")).getOrNull() ?: continue
             var picked: Pair<String, List<FotMob.Fixture>>? = null
             for (id in candidates.take(4)) {
                 val list = runCatching { FotMob.fixtures(id) }.onFailure(failed("games")).getOrNull() ?: continue
@@ -163,7 +166,7 @@ object Tracker {
                 val upcoming = games.filter { it.dateMillis > now - 3 * HOUR }.sortedBy { it.dateMillis }.take(2)
                 for (m in upcoming) {
                     val opponent = if (m.home == team.name) m.away else m.home
-                    val byOpponent = runCatching { FotMob.teamsByOpponent(opponent, m.dateMillis) }
+                    val byOpponent = runCatching { FotMob.teamsByOpponent(opponent, m.dateMillis, women) }
                         .onFailure(failed("team search")).getOrDefault(emptyList())
                     for (id in byOpponent.filter { it !in candidates.take(4) }) {
                         val list = runCatching { FotMob.fixtures(id) }.onFailure(failed("games")).getOrNull() ?: continue
@@ -277,6 +280,10 @@ object Tracker {
             })
         }
     }
+
+    /** A women's competition by ESPN's code: "concacaf.womens.championship", "fifa.friendly.w", "usa.nwsl"... */
+    private fun isWomen(slug: String) =
+        slug.split('.').any { it == "w" || "women" in it || it in setOf("wchampions", "wwc", "nwsl") }
 
     /** Teams added from search (or saved before colors existed) get their card color here. */
     private fun fillTeamColors(teams: List<Team>) {

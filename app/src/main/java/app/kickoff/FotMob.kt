@@ -35,19 +35,27 @@ object FotMob {
      * FotMob teams that may be [name] (men's teams), likeliest first: the full name, then shorter
      * forms, since FotMob's names can differ from ESPN's ("Pumas UNAM" may be just "Pumas").
      */
-    fun findTeams(name: String): List<String> {
+    /** ESPN team names FotMob calls something else (normalized ESPN name to FotMob's). */
+    private val ALIASES = mapOf("unitedstates" to "USA")
+
+    fun findTeams(name: String, women: Boolean = false): List<String> {
         val words = name.split(Regex("\\s+")).filter { it.isNotBlank() }
-        val queries = listOf(name, words.filter { norm(it) !in GENERIC }.joinToString(" "),
+        // FotMob's name for a few teams differs from ESPN's ("United States" is "USA").
+        val alias = ALIASES[norm(name)]
+        val queries = (listOfNotNull(alias, name, words.filter { norm(it) !in GENERIC }.joinToString(" "),
             words.maxByOrNull { if (norm(it) in GENERIC) 0 else it.length }.orEmpty())
+            // A women's team is "Name (W)" on FotMob.
+            .let { q -> if (women) q.map { "$it (W)" } + q else q })
             .map { it.trim() }.filter { it.length >= 3 }.distinct()
         val ids = mutableListOf<String>()
         for (q in queries) {
             val root = get("$BASE/search/suggest?term=${URLEncoder.encode(q, "UTF-8")}&lang=en")
             val teams = root.arr.flatMap { it.obj["suggestions"].arr }.map { it.obj }
                 .filter { it.str("type") == "team" }
-                // "(W)" is the women's team; FotMob's own ranking puts the best match first.
-                .filter { !it.str("name").orEmpty().endsWith("(W)") }
-            val exact = teams.filter { norm(it.str("name")) == norm(name) }
+                // "(W)" is the women's team: only those for a women's team, never for a men's.
+                // FotMob's own ranking puts the best match first.
+                .filter { it.str("name").orEmpty().endsWith("(W)") == women }
+            val exact = teams.filter { norm(it.str("name")?.removeSuffix("(W)")) in listOfNotNull(norm(name), alias?.let { a -> norm(a) }) }
             (exact + teams).mapNotNullTo(ids) { it.str("id") }
         }
         return ids.distinct()
@@ -58,8 +66,9 @@ object FotMob {
      * for an opponent instead: FotMob's results include their game, which names both sides. Returns
      * the other side of games against [opponent] kicking off within 3 hours of [kickoffMillis].
      */
-    fun teamsByOpponent(opponent: String, kickoffMillis: Long): List<String> {
-        val root = get("$BASE/search/suggest?term=${URLEncoder.encode(opponent, "UTF-8")}&lang=en")
+    fun teamsByOpponent(opponent: String, kickoffMillis: Long, women: Boolean = false): List<String> {
+        val term = if (women) "$opponent (W)" else opponent
+        val root = get("$BASE/search/suggest?term=${URLEncoder.encode(term, "UTF-8")}&lang=en")
         return root.arr.flatMap { it.obj["suggestions"].arr }.map { it.obj }
             .filter { it.str("type") == "match" }
             .filter { m ->
@@ -69,8 +78,8 @@ object FotMob {
             .mapNotNull { m ->
                 // The side that isn't the opponent we searched for.
                 when (norm(opponent)) {
-                    norm(m.str("homeTeamName")) -> m.str("awayTeamId")
-                    norm(m.str("awayTeamName")) -> m.str("homeTeamId")
+                    norm(m.str("homeTeamName")?.removeSuffix("(W)")) -> m.str("awayTeamId")
+                    norm(m.str("awayTeamName")?.removeSuffix("(W)")) -> m.str("homeTeamId")
                     else -> null
                 }
             }
