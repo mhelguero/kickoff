@@ -20,7 +20,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.app.NotificationManagerCompat
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Box
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.foundation.lazy.LazyListScope
@@ -1025,9 +1024,16 @@ private fun DayDivider(label: String) {
     }
 }
 
-/** A headline, in its team's color; tapping opens the article. */
+/** A headline or highlights video, in its team's color; tapping opens it. */
 @Composable
-private fun NewsCard(n: NewsItem, teams: List<Team>) = DefaultFontSize {
+private fun NewsCard(n: NewsItem, teams: List<Team>) {
+    // Videos (highlights) as big cards with their thumbnail across the top; articles compact.
+    if (n.image != null) HighlightCard(n, teams) else ArticleCard(n, teams)
+}
+
+/** A highlights video: its thumbnail across the top, then the team's crest, competition, length and title. */
+@Composable
+private fun HighlightCard(n: NewsItem, teams: List<Team>) {
     val context = LocalContext.current
     val background = colorOf(teams.firstOrNull { it.id == n.teamId })
     val content = contentOn(background)
@@ -1035,27 +1041,13 @@ private fun NewsCard(n: NewsItem, teams: List<Team>) = DefaultFontSize {
         Modifier.fillMaxWidth().clickable { Streaming.openUrl(context, n.url) },
         colors = if (background != null) CardDefaults.cardColors(containerColor = background, contentColor = content)
         else CardDefaults.cardColors(),
-        // No outline: a light shadow keeps white cards apart from the screen.
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
-        // As compact as a game card: a highlight's thumbnail, or the team's crest, on the left.
-        Row(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            if (n.image != null) {
-                // The video: thumbnail with a play button, and its length in the corner, as on YouTube.
-                Box(Modifier.width(128.dp).clip(RoundedCornerShape(8.dp))) {
-                    Thumbnail(n.image, Modifier.fillMaxWidth())
-                    Icon(Icons.Default.PlayArrow, null, tint = Color.White,
-                        modifier = Modifier.align(Alignment.Center).size(30.dp).background(Color.Black.copy(alpha = 0.55f), CircleShape).padding(4.dp))
-                    n.durationSecs?.let {
-                        Text(videoLength(it), color = Color.White, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold,
-                            modifier = Modifier.align(Alignment.BottomEnd).padding(4.dp)
-                                .background(Color.Black.copy(alpha = 0.75f), RoundedCornerShape(4.dp)).padding(horizontal = 4.dp, vertical = 1.dp))
-                    }
-                }
-                Spacer(Modifier.width(12.dp))
-            }
+        // Highlight videos show their thumbnail across the top.
+        n.image?.let { Thumbnail(it) }
+        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             // Which team the story is about.
-            else TeamCrest(n.teamId, background, size = 32.dp, gap = 10.dp)
+            TeamCrest(n.teamId, background)
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     // The app a tap opens (e.g. the browser, or ESPN or FotMob for their own links).
@@ -1066,19 +1058,60 @@ private fun NewsCard(n: NewsItem, teams: List<Team>) = DefaultFontSize {
                     // Highlights: the competition next to the icon ("Champions League").
                     if (n.isHighlight && n.writer.isNotBlank()) {
                         Spacer(Modifier.width(6.dp))
-                        Text(n.writer, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold,
-                            modifier = Modifier.weight(1f, fill = false), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(n.writer, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
                     }
                     Spacer(Modifier.weight(1f))
-                    // Articles: when posted. Highlights: nothing here, so the competition fits (the day
-                    // is above the card, the video's length on its thumbnail).
-                    if (n.image == null) Text(n.durationSecs?.let(::videoLength) ?: timeFmt.format(Instant.ofEpochMilli(n.timeMillis).atZone(ZoneId.systemDefault())),
+                    // Highlights: the video's length ("9:42"); articles (or a video whose length
+                    // isn't known): when it was posted.
+                    val corner = n.durationSecs?.let(::videoLength)
+                        ?: timeFmt.format(Instant.ofEpochMilli(n.timeMillis).atZone(ZoneId.systemDefault()))
+                    Text(corner, style = MaterialTheme.typography.labelLarge, color = content.copy(alpha = 0.8f))
+                }
+                Spacer(Modifier.height(4.dp))
+                Text(n.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                // Articles: writer and outlet, e.g. "Sam Marsden • ESPN". Highlights have no writer line.
+                if (!n.isHighlight) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(listOf(n.writer, n.source).filter { it.isNotBlank() }.distinct().joinToString(Streaming.DOT),
+                        style = MaterialTheme.typography.labelLarge, color = content.copy(alpha = 0.8f))
+                }
+            }
+        }
+    }
+}
+
+/** A headline, as compact as a game card. */
+@Composable
+private fun ArticleCard(n: NewsItem, teams: List<Team>) = DefaultFontSize {
+    val context = LocalContext.current
+    val background = colorOf(teams.firstOrNull { it.id == n.teamId })
+    val content = contentOn(background)
+    Card(
+        Modifier.fillMaxWidth().clickable { Streaming.openUrl(context, n.url) },
+        colors = if (background != null) CardDefaults.cardColors(containerColor = background, contentColor = content)
+        else CardDefaults.cardColors(),
+        // No outline: a light shadow keeps white cards apart from the screen.
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+    ) {
+        // As compact as a game card: the team's crest on the left.
+        Row(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            // Which team the story is about.
+            TeamCrest(n.teamId, background, size = 32.dp, gap = 10.dp)
+            Column(Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // The app a tap opens (e.g. the browser, or ESPN or FotMob for their own links).
+                    val appIcon by produceState<ImageBitmap?>(null, n.url) {
+                        value = withContext(Dispatchers.IO) { LinkApps.icon(context, n.url) }
+                    }
+                    appIcon?.let { Image(it, contentDescription = null, modifier = Modifier.size(20.dp)) }
+                    Spacer(Modifier.weight(1f))
+                    // When it was posted.
+                    Text(timeFmt.format(Instant.ofEpochMilli(n.timeMillis).atZone(ZoneId.systemDefault())),
                         style = MaterialTheme.typography.labelMedium, color = content.copy(alpha = 0.8f))
                 }
                 Spacer(Modifier.height(4.dp))
-                // The tab already says these are highlights: just the game ("Valencia 0–3 Real Madrid").
-                Text(n.title.removePrefix("Highlights: "), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold,
-                    maxLines = 3, overflow = TextOverflow.Ellipsis)
+                Text(n.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold,
+                    maxLines = 2, overflow = TextOverflow.Ellipsis)
                 // Articles: writer and outlet, e.g. "Sam Marsden • ESPN". Highlights have no writer line.
                 if (!n.isHighlight) {
                     Spacer(Modifier.height(2.dp))
@@ -1103,11 +1136,11 @@ private fun videoLength(secs: Int): String {
 }
 
 /**
- * A video thumbnail at 16:9, as wide as [modifier] makes it; nothing until (or unless) it loads. YouTube's largest
+ * A video thumbnail, full width at 16:9; nothing until (or unless) it loads. YouTube's largest
  * size doesn't exist for every video, so its standard size is tried next.
  */
 @Composable
-private fun Thumbnail(url: String, modifier: Modifier = Modifier) {
+private fun Thumbnail(url: String) {
     val context = LocalContext.current
     val image by produceState<ImageBitmap?>(null, url) {
         value = withContext(Dispatchers.IO) {
@@ -1115,9 +1148,9 @@ private fun Thumbnail(url: String, modifier: Modifier = Modifier) {
                 ?.let { Logos.load(context, it.replace("maxresdefault", "hqdefault")) }
         }
     }
-    // Its space is kept while it loads, so the card doesn't change size.
-    Box(modifier.aspectRatio(16f / 9f).background(MaterialTheme.colorScheme.surfaceVariant)) {
-        image?.let { Image(it, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()) }
+    image?.let {
+        Image(it, contentDescription = null, contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f))
     }
 }
 
